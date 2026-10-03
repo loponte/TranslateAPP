@@ -243,17 +243,19 @@ def test_slow_worker_coalesces_partials():
     script = [[ev("partial", 0, 1.0)] for _ in range(n)] + [[ev("final", 0, 3.0)]]
     asr, mt = Asr(0.4, 0.4), Mt()
     with running(script, asr, mt=mt) as (p, cap, out):
-        depth = 0
+        depth, t0 = 0, time.monotonic()
         for _ in range(n):
             feed(cap)
             depth = max(depth, len(p._sess.inbox))
             time.sleep(0.1)
         t_final = time.monotonic()
+        feed_s = t_final - t0                  # o sleep(0.1) estica em runner lento (mac do CI): o teto de parciais escala com isso
         feed(cap)
         items = collect(out, lambda it: n_finals(it) == 1)
     ups = [u for u in items if isinstance(u, Update)]
     n_partial = sum(not f for _, f in asr.calls)
-    assert 2 <= n_partial <= 9, f"{n_partial} parciais processados de {n}: sem coalescer?"
+    # sem coalescer seriam n; coalescendo, 1 parcial por ~0,4 s de ASR durante a alimentação (+ o em andamento e a folga de 1)
+    assert 2 <= n_partial <= min(feed_s / 0.4 + 2, 0.6 * n), f"{n_partial} parciais processados de {n} em {feed_s:.2f}s: sem coalescer?"
     assert depth <= 2, f"fila cresceu: {depth}"
     assert ups[-1].final and ups[-1].t_ready - t_final < 1.5, "final atrasou além do parcial em andamento + 1 job (~0,8 s)"
     assert len(mt.calls) == 2, f"MT deveria pular parciais com EN repetido: {mt.calls}"

@@ -24,7 +24,7 @@ Name: "{group}\TranslateAPP"; Filename: "{app}\TranslateAPP.exe"
 Name: "{autodesktop}\TranslateAPP"; Filename: "{app}\TranslateAPP.exe"; Tasks: desktopicon
 
 [Tasks]
-Name: "desktopicon"; Description: "Criar atalho na área de trabalho"; Flags: unchecked
+Name: "desktopicon"; Description: "Criar atalho na area de trabalho"; Flags: unchecked
 
 [Run]
 Filename: "{app}\TranslateAPP.exe"; Description: "Abrir o TranslateAPP"; Flags: nowait postinstall skipifsilent

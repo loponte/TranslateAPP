@@ -11,7 +11,7 @@ a legenda definitiva sai ~0,45 s depois da frase terminar, até ~0,7 s quando a 
 > Os outros modelos (Whisper, VAD, locutores) têm as licenças dos próprios autores.
 
 ## Baixar pronto (sem instalar Python)
-Na página de **Releases** do GitHub há dois zips (gerados pelo Actions). Os modelos **não** vêm no pacote: na 1ª abertura o app
+Na página de **Releases** do GitHub há o `TranslateAPP-Setup.exe` e o `TranslateAPP.dmg` (gerados pelo Actions). Os modelos **não** vêm no pacote: na 1ª abertura o app
 baixa tudo para a pasta de dados (Windows `%LOCALAPPDATA%\TranslateAPP`, macOS `~/Library/Application Support/TranslateAPP`)
 mostrando o progresso na janela (Whisper, tradutor ~860 MB, locutores). Logs em `logs\app.log` dessa pasta.
 - **Windows (.exe):** baixe e rode `TranslateAPP-Setup.exe` (instala por usuário, sem admin). Com GPU NVIDIA, o app
