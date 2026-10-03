@@ -5,3 +5,5 @@ __pycache__/
 *.pyc
 *.lnk
 settings.json
+build/
+dist/

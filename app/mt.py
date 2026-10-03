@@ -91,8 +91,9 @@ _POST = [  # (condição na fonte | None, padrão na saída, troca)
 ]
 
 
-def ensure_model(models_dir: str = "models") -> str:
-    """Idempotente: baixa o modelo oficial (~860 MB, só na 1ª vez), converte e guarda em <models_dir>/mt-en-pt."""
+def ensure_model(models_dir: str = "models", on_progress=None) -> str:
+    """Idempotente: baixa o modelo oficial (~860 MB, só na 1ª vez), converte e guarda em <models_dir>/mt-en-pt.
+    on_progress(frac | None): só quando há download (None = sem % conhecido, ex.: convertendo)."""
     d = Path(models_dir) / "mt-en-pt"
     if all((d / f).exists() for f in _FILES):
         return str(d)
@@ -104,10 +105,17 @@ def ensure_model(models_dir: str = "models") -> str:
             tmp = Path(tmp)
             print("Baixando o modelo de tradução (~860 MB, só na 1a vez)...", flush=True)
             with urllib.request.urlopen(ZIP_URL, timeout=60) as r, open(tmp / "m.zip", "wb") as f:
-                shutil.copyfileobj(r, f)
+                total, got = int(r.headers.get("Content-Length") or 0), 0
+                while chunk := r.read(1 << 20):
+                    f.write(chunk)
+                    got += len(chunk)
+                    if on_progress:
+                        on_progress(got / total if total else None)
             with open(tmp / "m.zip", "rb") as f:
                 if hashlib.file_digest(f, "sha256").hexdigest() != ZIP_SHA256:
                     raise ValueError("checksum do download não confere")
+            if on_progress:
+                on_progress(None)  # convertendo (~1 min)
             zipfile.ZipFile(tmp / "m.zip").extractall(tmp / "src")
             OpusMTConverter(str(tmp / "src")).convert(str(tmp / "out"), quantization="float16")
             for name in ("source.spm", "target.spm", "README.md", "LICENSE"):
@@ -134,10 +142,10 @@ def _split(text: str) -> list[str]:
 
 
 class Translator:
-    def __init__(self, *, model_dir: str = "models/mt-en-pt", device: str = "auto"):
+    def __init__(self, *, model_dir: str = "models/mt-en-pt", device: str = "auto", on_progress=None):
         d = Path(model_dir)
         if not (d / "model.bin").exists() and d.name == "mt-en-pt":
-            ensure_model(str(d.parent))  # 1ª execução sem o setup.ps1: baixa agora (idempotente)
+            ensure_model(str(d.parent), on_progress)  # 1ª execução sem o setup.ps1: baixa agora (idempotente)
         if not (d / "model.bin").exists():
             raise FileNotFoundError(f"Modelo de tradução ausente em {d}; rode app.mt.ensure_model()")
         setup_cuda_dlls()

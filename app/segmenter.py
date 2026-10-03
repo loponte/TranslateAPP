@@ -19,10 +19,11 @@ import numpy as np
 import onnxruntime as ort
 
 from app.events import SR, SegEvent
+from app.paths import MODELS
 
 W = 512                 # amostras por janela do VAD (32 ms)
 _CTX = 64               # contexto do Silero: últimas amostras da janela anterior
-_MODEL = Path(__file__).resolve().parent.parent / "models" / "silero_vad.onnx"
+_MODEL = MODELS / "silero_vad.onnx"
 _IDLE, _CAND, _ACT = range(3)
 
 
@@ -32,7 +33,7 @@ def _session() -> ort.InferenceSession:
     if not path.exists():  # o faster-whisper já traz o modelo: copia em vez de baixar
         path = Path(importlib.util.find_spec("faster_whisper").origin).parent / "assets" / "silero_vad_v6.onnx"
         try:
-            _MODEL.parent.mkdir(exist_ok=True)
+            _MODEL.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(path, _MODEL)
             path = _MODEL
         except OSError:

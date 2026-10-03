@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 import logging
+import multiprocessing
 import os
 import queue
 import sys
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+from app.paths import DATA_DIR, LOGS
 
 # Calibração (ver README): vão direto para os construtores; vazio = padrão do módulo.
 SEG_KW: dict = {}   # ex.: {"end_silence_ms": 350, "end_silence_long_ms": 200}: final mais rápido, mas corta frases nas pausas
@@ -17,8 +17,8 @@ AUTOSTART = True    # já começa a escutar ao abrir (com o último dispositivo 
 
 
 def _setup_logging() -> None:
-    (ROOT / "logs").mkdir(exist_ok=True)
-    f = open(ROOT / "logs" / "app.log", "a", encoding="utf-8", buffering=1)  # ponytail: sem rotação do log
+    LOGS.mkdir(parents=True, exist_ok=True)
+    f = open(LOGS / "app.log", "a", encoding="utf-8", buffering=1)  # ponytail: sem rotação do log
     if sys.stderr is None:  # pythonw (sem console): bibliotecas que escrevem em stderr/stdout (tqdm...) quebrariam
         sys.stdout = sys.stderr = f
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s", stream=f)
@@ -28,9 +28,36 @@ def _setup_logging() -> None:
         logging.getLogger().addHandler(logging.StreamHandler())
 
 
+def selftest() -> None:
+    """Smoke test do pacote (`--selftest`): importa tudo, cria o VAD, lista dispositivos (sem áudio não quebra), Tk oculto."""
+    import tkinter
+
+    import app.asr, app.diar, app.mt, app.pipeline, app.ui  # noqa: E401,F401
+    from app.audio import list_loopback_devices
+    from app.segmenter import Segmenter
+
+    Segmenter()
+    print("dispositivos:", [d.name for d in list_loopback_devices()])
+    r = tkinter.Tk()
+    r.withdraw()
+    r.update()
+    r.destroy()
+
+
 def main() -> None:
-    os.chdir(ROOT)  # os módulos usam caminhos relativos (models/, logs/)
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    os.chdir(DATA_DIR)  # os módulos usam caminhos relativos (models/, logs/)
     _setup_logging()
+    if "--selftest" in sys.argv:
+        try:   # resultado também em arquivo: no .exe windowed o stdout não chega ao CI
+            selftest()
+            msg, code = f"selftest ok {DATA_DIR}", 0
+        except BaseException:
+            import traceback
+            msg, code = "selftest FALHOU\n" + traceback.format_exc(), 1
+        (DATA_DIR / "selftest.txt").write_text(msg, encoding="utf-8")
+        print(msg, flush=True)
+        os._exit(code)
     from app.audio import list_loopback_devices
     from app.pipeline import Pipeline
     from app.ui import App
@@ -48,6 +75,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()  # .app/.exe: sem isso o resource_tracker do multiprocessing reabre o app em cascata
     main()
     logging.shutdown()
+    sys.stdout.flush()
     os._exit(0)  # sem teardown do interpretador: um job de GPU em andamento (thread daemon) pode travar o fim

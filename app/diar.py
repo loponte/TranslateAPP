@@ -86,13 +86,18 @@ SHORT_K = 0.2        # trecho curto (embedding ruidoso) se funde ao vizinho com 
 POOL = 4             # embeddings dos trechos em paralelo (o sherpa-onnx libera o GIL e é thread-safe)
 
 
-def _fetch(url: str, path: str, member: str | None = None) -> None:
+def _fetch(url: str, path: str, member: str | None = None, on_progress=None) -> None:
     """Baixa url para path (atômico). member: arquivo dentro de um tar.bz2 (só ele é extraído)."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".part"  # só vira o arquivo final se vier completo
     with urllib.request.urlopen(url, timeout=30) as r, open(tmp, "wb") as f:
-        shutil.copyfileobj(r, f)
         size = int(r.headers.get("Content-Length") or -1)
+        while chunk := r.read(1 << 18):
+            f.write(chunk)
+            if on_progress and size > 0:
+                on_progress(min(1.0, f.tell() / size))
+        if on_progress and size <= 0:
+            on_progress(None)
     if size >= 0 and os.path.getsize(tmp) != size:
         raise OSError(f"download incompleto: {url}")
     if member:  # só o modelo sai do tar.bz2
@@ -103,15 +108,15 @@ def _fetch(url: str, path: str, member: str | None = None) -> None:
     os.replace(tmp, path)
 
 
-def ensure_model(models_dir: str = "models") -> str:
+def ensure_model(models_dir: str = "models", on_progress=None) -> str:
     """Baixa os modelos de embedding e de segmentação para <models_dir>/spk (idempotente); devolve o do embedding.
     Levanta se a rede falhar."""
     path = os.path.join(models_dir, "spk", MODEL)
     if not os.path.isfile(path):
-        _fetch(URL + MODEL, path)
+        _fetch(URL + MODEL, path, on_progress=on_progress)
     seg = os.path.join(models_dir, "spk", SEG_MODEL)
     if not os.path.isfile(seg):
-        _fetch(SEG_URL, seg, SEG_MEMBER)
+        _fetch(SEG_URL, seg, SEG_MEMBER, on_progress)
     return path
 
 
@@ -138,9 +143,9 @@ class _Piece:
 
 class SpeakerTracker:
     def __init__(self, *, threshold: float = 0.40, min_audio_s: float = 1.0, max_speakers: int = 8,
-                 models_dir: str = "models"):
+                 models_dir: str = "models", on_progress=None):
         self.threshold, self.min_audio_s, self.max_speakers = threshold, min_audio_s, max_speakers
-        cfg = sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=ensure_model(models_dir), num_threads=THREADS)
+        cfg = sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=ensure_model(models_dir, on_progress), num_threads=THREADS)
         self._ex = sherpa_onnx.SpeakerEmbeddingExtractor(cfg)
         self._embed((np.random.default_rng(0).standard_normal(SR) * 0.05).astype(np.float32))  # aquece
         o = ort.SessionOptions()

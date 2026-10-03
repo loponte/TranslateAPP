@@ -37,4 +37,5 @@ class Update:
 class Status:
     """Mensagem de status (pt-BR) para a barra de status da UI."""
     text: str
-    level: Literal["info", "warn", "error", "ready"] = "info"
+    level: Literal["info", "warn", "error", "ready", "download"] = "info"
+    progress: float | None = None  # 0..1 em "download"; None = indeterminado

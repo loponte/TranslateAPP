@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ctypes
 import queue
+import sys
 import threading
 import time
 import traceback
@@ -18,7 +19,9 @@ from typing import Callable
 
 import av
 import numpy as np
-import pyaudiowpatch as pa
+
+if sys.platform == "win32":
+    import pyaudiowpatch as pa
 
 from app.events import SR
 
@@ -34,7 +37,7 @@ class LoopbackDevice:
     is_default: bool
 
 
-def _loopbacks(p: pa.PyAudio) -> list[dict]:
+def _loopbacks(p: "pa.PyAudio") -> list[dict]:
     """Dispositivos loopback WASAPI (dict do PortAudio) com o padrão do Windows primeiro."""
     devs = list(p.get_loopback_device_info_generator())
     try:
@@ -47,6 +50,14 @@ def _loopbacks(p: pa.PyAudio) -> list[dict]:
 
 
 def list_loopback_devices() -> list[LoopbackDevice]:
+    """Windows: saídas WASAPI (padrão primeiro). macOS: "Áudio do sistema" + entradas (ex.: BlackHole)."""
+    if sys.platform == "darwin":
+        from app import audio_mac
+        try:
+            ins = audio_mac.inputs()
+        except Exception:   # sem PortAudio/sem dispositivo: o áudio do sistema ainda funciona
+            ins = []
+        return [LoopbackDevice(i, n, i == 0) for i, n in enumerate([audio_mac.SYSTEM, *ins])]
     p = pa.PyAudio()
     try:
         return [LoopbackDevice(d["index"], d["name"].removesuffix(" [Loopback]"), d["is_default"]) for d in _loopbacks(p)]
@@ -54,7 +65,7 @@ def list_loopback_devices() -> list[LoopbackDevice]:
         p.terminate()
 
 
-_ole = ctypes.OleDLL("ole32")
+_ole = ctypes.OleDLL("ole32") if sys.platform == "win32" else None
 
 
 def _default_render_id() -> str | None:
@@ -97,7 +108,7 @@ class LoopbackCapture:
         self._stop.clear()
         self._q = queue.Queue()
         self._threads = [threading.Thread(target=f, name=n, daemon=True)
-                         for n, f in (("audio-pump", self._pump), ("audio-dev", self._manage))]
+                         for n, f in (("audio-pump", self._pump), ("audio-dev", self._manage_mac if sys.platform == "darwin" else self._manage))]
         for t in self._threads:
             t.start()
 
@@ -119,7 +130,11 @@ class LoopbackCapture:
                 traceback.print_exc()
 
     # ---- dispositivo ----
-    def _open(self, p: pa.PyAudio):
+    def _manage_mac(self) -> None:
+        from app import audio_mac
+        audio_mac.manage(self)
+
+    def _open(self, p: "pa.PyAudio"):
         devs = _loopbacks(p)
         if self.device is None:
             d = devs[0] if devs else None

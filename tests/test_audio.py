@@ -15,12 +15,15 @@ import sys
 import tempfile
 import threading
 import time
+import subprocess
 import wave
-import winsound
 from pathlib import Path
 
 import av
 import numpy as np
+
+if sys.platform == "win32":
+    import winsound
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import app.audio as audio  # noqa: E402
@@ -97,16 +100,34 @@ def _trecho_8s(tmp: str) -> np.ndarray:
     return np.concatenate([o.to_ndarray().reshape(-1) for o in av.AudioResampler(format="flt", layout="mono", rate=SR).resample(f)])
 
 
+_proc = None
+
+
+def _play(path):   # assíncrono: winsound no Windows, afplay no macOS
+    global _proc
+    if sys.platform == "win32":
+        winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+    else:
+        _proc = subprocess.Popen(["afplay", path])
+
+
+def _stop_play():
+    if sys.platform == "win32":
+        winsound.PlaySound(None, winsound.SND_PURGE)
+    elif _proc:
+        _proc.terminate()
+
+
 @manual
 def test_toca_8s_e_segmenta():
     tmp = os.path.join(tempfile.gettempdir(), "translateapp_audio_test_8s.wav")
     ref = _trecho_8s(tmp)
-    play = lambda: winsound.PlaySound(tmp, winsound.SND_FILENAME | winsound.SND_ASYNC)
+    play = lambda: _play(tmp)
     if DEVICE:
         print("  (som tocado na saída PADRÃO; com TRANSLATEAPP_AUDIO_DEVICE só vale se for a mesma)")
     seg = Segmenter()
     chunks, ends, ev, _ = _capture(11.0, play=play, seg=seg)
-    winsound.PlaySound(None, winsound.SND_PURGE)
+    _stop_play()
     x = np.concatenate(chunks)
     env = lambda a: np.sqrt((a[:len(a) // 1600 * 1600].reshape(-1, 1600).astype(np.float64) ** 2).mean(axis=1))   # RMS de 100 ms
     ex, er = env(x), env(ref)

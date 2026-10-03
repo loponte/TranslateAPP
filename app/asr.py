@@ -58,7 +58,7 @@ def _pick(model: str, device: str, compute_type: str) -> tuple[str, str, str]:
     return model, device, compute_type
 
 
-def ensure_model(models_dir: str = "models", model: str = "auto") -> str:
+def ensure_model(models_dir: str = "models", model: str = "auto", on_progress=None) -> str:
     """Baixa o modelo (padrão do hardware) para <models_dir>/whisper; idempotente. Devolve o diretório local."""
     name = _pick(model, "auto", "auto")[0]
     root = os.path.join(models_dir, "whisper")
@@ -68,6 +68,8 @@ def ensure_model(models_dir: str = "models", model: str = "auto") -> str:
             return path
     except Exception:
         pass
+    if on_progress:
+        on_progress(None)  # ponytail: download do HF sem % (indeterminado), tqdm por arquivo se incomodar
     return download_model(name, cache_dir=root)
 
 
@@ -75,12 +77,12 @@ class Transcriber:
     """Whisper EN -> texto. `transcribe(audio, final)`: parcial = beam 1; final = beam `beam_final`."""
 
     def __init__(self, *, model: str = "auto", device: str = "auto", compute_type: str = "auto",
-                 language: str = "en", models_dir: str = "models", cpu_threads: int = 0):
+                 language: str = "en", models_dir: str = "models", cpu_threads: int = 0, on_progress=None):
         self.model_name, self.device, self.compute_type = _pick(model, device, compute_type)
         self.language = language
         self.beam_final = 5          # beam do final=True (mesmo WER e latência que 3; 1 piora no difícil)
         self.prompt: str | None = None  # initial_prompt: testado com jargão (Discord, deploy, ping...), não melhorou o WER
-        path = ensure_model(models_dir, self.model_name)
+        path = ensure_model(models_dir, self.model_name, on_progress)
         # CPU: 8 threads (4 é bem pior; 8-16 dão o mesmo ~0,9 s no clipe de 4 s do small.en); deixa o resto para o pipeline
         threads = cpu_threads or min(8, os.cpu_count() or 4)
         self._m = WhisperModel(path, device=self.device, compute_type=self.compute_type, cpu_threads=threads)

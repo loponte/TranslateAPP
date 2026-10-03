@@ -2,7 +2,7 @@
 `python -m app.ui --demo` roda com dados falsos; `--stress` faz rajadas de 3000 updates + checagens."""
 from __future__ import annotations
 
-import ctypes, itertools, json, queue, re, sys, threading, time
+import itertools, json, queue, re, sys, threading, time
 import tkinter as tk
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
@@ -12,26 +12,31 @@ from tkinter import filedialog, font as tkfont, ttk
 from types import SimpleNamespace
 
 from app.events import Status, Update
+from app.paths import SETTINGS
 
-SETTINGS = Path(__file__).resolve().parent.parent / "settings.json"
+WIN, MAC = sys.platform == "win32", sys.platform == "darwin"
 DEFAULTS = {"font": 15, "alpha": 1.0, "topmost": False, "show_en": True, "device": None, "geometry": "1100x660"}
-PADRAO = "Padrão do Windows"
+PADRAO = "Padrão do sistema" if MAC else "Padrão do Windows"
+MOD = "Command" if MAC else "Control"  # tecla dos atalhos (Cmd-L/Cmd-S no mac)
+PX = 4 / 3 if MAC else 1.0  # o Tk do mac usa 72 dpi (1 pt = 1 px); no Windows 1 pt = 1,33 px: compensa para o mesmo tamanho
 MAX_LINHAS = 2000  # utterances no widget; as mais antigas saem da tela (continuam no .txt salvo)
 EXTRA_ID = 1_000_000  # utt_id das linhas extras de um final dividido por locutor (= app.pipeline.EXTRA_ID; a UI não importa o pipeline)
 BUDGET = 0.012  # s por tick processando updates: uma rajada nunca prende a UI
 BG, BAR, FIELD, LINE, FG, BTN, HI, SEL = "#14161a", "#1b1e24", "#101216", "#2a2e36", "#e8eaed", "#272b33", "#343a46", "#2f4b7c"
 LOCUTORES = ["#6cb6ff", "#ffa657", "#7ee787", "#ff7eb6", "#bc8cff", "#f2cc60", "#56d4dd", "#ff7b72", "#9aa3b0"]  # 8 + "?"
-NIVEIS = {"info": "#9aa3b0", "ready": "#7ee787", "warn": "#f2cc60", "error": "#ff7b72"}
+NIVEIS = {"info": "#9aa3b0", "ready": "#7ee787", "download": "#6cb6ff", "warn": "#f2cc60", "error": "#ff7b72"}
 
 
 class App:
     def __init__(self, out_q, *, get_devices, on_start, on_stop):
         self.q, self.get_devices, self.on_start, self.on_stop = out_q, get_devices, on_start, on_stop
         self.ctl = ThreadPoolExecutor(1, thread_name_prefix="ui-ctl")
-        try:
-            ctypes.windll.shcore.SetProcessDpiAwareness(1)  # sem isso o Windows estica a janela (texto borrado)
-        except Exception:
-            pass  # fora do Windows ou já definido
+        if WIN:
+            try:
+                import ctypes
+                ctypes.windll.shcore.SetProcessDpiAwareness(1)  # sem isso o Windows estica a janela (texto borrado)
+            except Exception:
+                pass  # já definido
         self.cfg = cfg = self._load()
         self.root = r = tk.Tk()
         # (época, utt_id) -> linha; linhas podadas (ponytail: ficam na RAM, ~200 B cada; gravar em disco se rodar por dias)
@@ -52,7 +57,7 @@ class App:
         r.protocol("WM_DELETE_WINDOW", self._close)
         for k, f in (("l", self.clear), ("s", self.save)):
             for key in (k, k.upper()):
-                r.bind(f"<Control-{key}>", lambda e, f=f: f())
+                r.bind(f"<{MOD}-{key}>", lambda e, f=f: f())
 
     # ---------- preferências e janela
     def _load(self):
@@ -70,6 +75,7 @@ class App:
                "show_en": self.show_en.get(), "device": self._device(),
                "geometry": r.geometry() if r.state() == "normal" else self.cfg["geometry"]}
         try:
+            SETTINGS.parent.mkdir(parents=True, exist_ok=True)  # empacotado: a pasta de dados pode não existir ainda
             SETTINGS.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), "utf-8")
         except OSError:
             pass
@@ -87,7 +93,10 @@ class App:
             r.geometry(f"+{vx + 80}+{vy + 80}")  # monitor removido: não deixa a janela fora da tela
 
     def _titlebar(self):
+        if not WIN:
+            return
         try:  # barra de título escura (Windows 10 2004+/11)
+            import ctypes
             self.root.update_idletasks()
             hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
             for attr, val in ((20, 1), (35, 0x241E1B)):  # modo escuro; cor da barra = BAR (BGR)
@@ -98,12 +107,14 @@ class App:
     # ---------- construção
     def _theme(self):
         r = self.root
+        self.family = "Segoe UI" if WIN else tkfont.nametofont("TkDefaultFont", root=r).actual("family")  # SF no mac
+        ui = (self.family, round(10 * PX))
         for k, v in (("background", FIELD), ("foreground", FG), ("selectBackground", SEL), ("selectForeground", FG),
-                     ("font", ("Segoe UI", 10))):
+                     ("font", ui)):
             r.option_add(f"*TCombobox*Listbox.{k}", v)
         st = ttk.Style(r)
         st.theme_use("clam")
-        st.configure(".", background=BAR, foreground=FG, font=("Segoe UI", 10), bordercolor=LINE, lightcolor=BAR,
+        st.configure(".", background=BAR, foreground=FG, font=ui, bordercolor=LINE, lightcolor=BAR,
                      darkcolor=BAR, troughcolor=FIELD, focuscolor=BAR)
 
         def flat(name, bg, hi, **kw):  # estilo sem relevo; cor de realce no hover
@@ -130,7 +141,7 @@ class App:
 
     def _build(self):
         r, cfg = self.root, self.cfg
-        F = lambda **kw: tkfont.Font(root=r, family="Segoe UI", **kw)
+        F = lambda **kw: tkfont.Font(root=r, family=self.family, **kw)
         f = self.fonts = {"pt": F(), "ptp": F(slant="italic"), "en": F(), "enp": F(slant="italic"), "hdr": F(weight="bold")}
         self._fonts()
         bar = ttk.Frame(r, padding=(14, 12, 14, 10))  # barra superior
@@ -171,7 +182,7 @@ class App:
         body = tk.Frame(r, bg=BG)  # transcrição (fonte mínima no widget: define a altura da linha vazia final)
         body.pack(fill="both", expand=True)
         t = self.text = tk.Text(body, wrap="word", bg=BG, fg=FG, bd=0, highlightthickness=0, padx=22, pady=10,
-                                font=("Segoe UI", 3), state="disabled", insertwidth=0, selectbackground=SEL,
+                                font=(self.family, 3), state="disabled", insertwidth=0, selectbackground=SEL,
                                 inactiveselectbackground=SEL)
         vs = ttk.Scrollbar(body, command=lambda *a: (t.yview(*a), self._check()))  # arrastar a barra pausa/retoma
         t.configure(yscrollcommand=vs.set)
@@ -189,6 +200,48 @@ class App:
         for ev in ("<MouseWheel>", "<KeyRelease>", "<ButtonRelease-1>"):  # o usuário rolou: pausa/retoma o autoscroll
             t.bind(ev, lambda e: r.after_idle(self._check), add="+")
         t.bind("<Configure>", lambda e: self._stick(), add="+")
+        self._download_panel(body)
+
+    def _download_panel(self, parent):
+        """Tela de 1º uso: painel central sobre a transcrição enquanto os modelos baixam (Status level "download")."""
+        ttk.Style(self.root).configure("Dl.Horizontal.TProgressbar", background="#2f81f7", troughcolor=FIELD,
+                                       bordercolor=LINE, lightcolor="#2f81f7", darkcolor="#2f81f7", thickness=8)
+        card = self.dl = tk.Frame(parent, bg=BAR, highlightthickness=1, highlightbackground=LINE, padx=36, pady=28)
+        title = lambda **kw: tk.Label(card, bg=BAR, font=(self.family, round(kw.pop("size") * PX), *kw.pop("style", ())), **kw)
+        title(text="Preparando o primeiro uso", size=15, style=("bold",), fg=FG).pack()
+        self.dl_text = title(text="", size=11, fg=NIVEIS["download"], wraplength=420, justify="center")
+        self.dl_text.pack(pady=(12, 14))
+        self.dl_bar = ttk.Progressbar(card, style="Dl.Horizontal.TProgressbar", length=420, maximum=100)
+        self.dl_bar.pack()
+        self.dl_pct = title(text="", size=10, fg=NIVEIS["info"])
+        self.dl_pct.pack(pady=(8, 0))
+        title(text="Isso só acontece uma vez: os modelos ficam salvos neste computador.", size=10, fg="#737e90",
+              wraplength=420, justify="center").pack(pady=(18, 0))
+
+    def _download(self, s):
+        """Mostra/atualiza o painel; barra determinada se houver progress, senão indeterminada."""
+        if not self.dl.winfo_ismapped():
+            self.dl.place(relx=0.5, rely=0.5, anchor="center")
+            self.dl.lift()
+        self.dl_text.configure(text=s.text)
+        p = getattr(s, "progress", None)
+        if p is None:
+            if str(self.dl_bar.cget("mode")) != "indeterminate":
+                self.dl_bar.configure(mode="indeterminate")
+                self.dl_bar.start(14)
+            self.dl_pct.configure(text="")
+        else:
+            if str(self.dl_bar.cget("mode")) != "determinate":
+                self.dl_bar.stop()
+                self.dl_bar.configure(mode="determinate")
+            p = max(0.0, min(1.0, p))
+            self.dl_bar.configure(value=p * 100)
+            self.dl_pct.configure(text=f"{p * 100:.0f}%")
+
+    def _download_hide(self):
+        if self.dl.winfo_ismapped():
+            self.dl_bar.stop()
+            self.dl.place_forget()
 
     # ---------- ações da barra
     def _devices(self, keep=None):
@@ -220,6 +273,7 @@ class App:
         self.dev.configure(state="disabled" if run else "readonly")
         self.refresh.configure(state="disabled" if run else "normal")
         if not run:
+            self._download_hide()
             self._status(Status("Parado."))
 
     def _freeze_partials(self):  # parou no meio da fala: a linha parcial vira definitiva (senão fica cinza/itálico)
@@ -245,7 +299,7 @@ class App:
 
     def _fonts(self):
         for k, v in (("pt", 1), ("ptp", 1), ("en", .72), ("enp", .72), ("hdr", .7)):
-            self.fonts[k].configure(size=max(8, round(self.size * v)))
+            self.fonts[k].configure(size=max(8, round(self.size * v * PX)))
 
     def _zoom(self, d):
         self.size = max(9, min(40, self.size + d))
@@ -404,6 +458,10 @@ class App:
         self._render(head)  # a primeira linha da tela sempre leva cabeçalho
 
     def _status(self, s):
+        if s.level == "download":
+            self._download(s)
+        elif s.level != "info":  # "ready"/"warn"/"error" encerram a tela de 1º uso (info não: pode vir entre dois downloads)
+            self._download_hide()
         self.stat.configure(text=s.text, foreground=NIVEIS.get(s.level, NIVEIS["info"]))
 
     @staticmethod
@@ -473,7 +531,21 @@ def _roteiro(q, run, stop):
 def _demo():
     q, run, stop = queue.Queue(), threading.Event(), threading.Event()
     nomes = ["Alto-falantes (Realtek High Definition Audio)", "LG HDR WFHD (NVIDIA High Definition Audio)", "NVIDIA HDMI Output"]
-    start = lambda d: (q.put(Status("Pronto — escutando o áudio do PC (demo)", "ready")), run.set())
+    first = [True]
+
+    def start(d):
+        if first[0]:  # 1ª vez: simula o download dos modelos (2 determinados, 1 indeterminado) antes do "ready"
+            first[0] = False
+            for nome, n in (("modelo de voz (small.en)", 1), ("tradutor EN→PT (opus-mt)", 2), ("detector de locutor", 3)):
+                q.put(Status(f"Baixando {nome}… ({n}/3)", "download", None if n == 3 else 0.0))
+                for i in range(1, 21 if n < 3 else 12):
+                    if stop.wait(0.08 if n < 3 else 0.2):
+                        return
+                    if n < 3:
+                        q.put(Status(f"Baixando {nome}… ({n}/3)", "download", i / 20))
+        q.put(Status("Pronto — escutando o áudio do PC (demo)", "ready"))
+        run.set()
+    start = lambda d, f=start: threading.Thread(target=f, args=(d,), name="demo-dl", daemon=True).start()
     app = App(q, get_devices=lambda: nomes, on_start=start, on_stop=run.clear)
     th = threading.Thread(target=_roteiro, args=(q, run, stop), name="demo")
     th.start()

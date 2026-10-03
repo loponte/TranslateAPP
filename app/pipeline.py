@@ -17,9 +17,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.events import SR, SegEvent, Status, Update
+from app.paths import FROZEN, LOGS
 
 log = logging.getLogger("pipeline")
-ROOT = Path(__file__).resolve().parents[1]
 STOP_JOIN_S = 1.0  # teto do stop(): espera a captura fechar; job de GPU em andamento não é interrompível
 EXTRA_ID = 1_000_000  # utt_id das linhas extras de um final dividido por locutor (o Segmenter conta de 0: não colide)
 
@@ -29,7 +29,7 @@ class _Fail(RuntimeError):
 
 
 def _why(e: BaseException) -> str:
-    hint = " (rode setup.ps1)" if isinstance(e, (ImportError, FileNotFoundError)) else ""
+    hint = " (rode setup.ps1)" if not FROZEN and isinstance(e, (ImportError, FileNotFoundError)) else ""
     return f"{type(e).__name__}: {e}{hint}"
 
 
@@ -106,7 +106,7 @@ class _Session:
 class Pipeline:
     def __init__(self, out: queue.Queue, *, segmenter=None, transcriber=None, tracker=None, translator=None,
                  capture_factory=None, seg_kw=None, asr_kw=None, diar_kw=None, piece_pad_s: float = 0.0,
-                 log_path: str | Path = ROOT / "logs" / "latency.csv"):
+                 log_path: str | Path = LOGS / "latency.csv"):
         """`out` recebe Update | Status. Instâncias injetadas (testes) substituem as reais;
         `*_kw` (calibração) vão para os construtores reais. capture_factory(on_audio, device=, on_status=) -> captura.
         piece_pad_s: folga de áudio de cada lado do trecho ao re-transcrever um final dividido por locutor."""
@@ -151,7 +151,7 @@ class Pipeline:
             with self._load_lock:
                 if s.stop.is_set():
                     return
-                self._load()
+                self._load(s)
             if s.stop.is_set():
                 return
             with self._infer:  # um job da sessão anterior ainda pode estar usando o tracker
@@ -197,26 +197,37 @@ class Pipeline:
                 except Exception:
                     log.exception("erro ao parar a captura")
 
-    def _load(self) -> None:
-        """Cria o que não foi injetado. Fica no self: Parar+Iniciar não recarrega nada."""
-        from app.cuda_dlls import setup_cuda_dlls
+    def _load(self, s: _Session | None = None) -> None:
+        """Cria o que não foi injetado. Fica no self: Parar+Iniciar não recarrega nada.
+        Modelo ausente = baixa agora (1º uso) e avisa a UI com Status "download" (n/4 = Whisper, tradutor, locutores, VAD)."""
+        def dl(label: str, n: int | None = None):
+            last = [-1.0]
+
+            def cb(frac: float | None) -> None:  # chamado só quando há download; frac None = indeterminado
+                if s is not None and (frac is None or frac - last[0] >= 0.01 or frac >= 1):
+                    last[0] = frac if frac is not None else last[0]
+                    self._emit(s, Status(f"Baixando {label}…" + (f" ({n}/4)" if n else ""), "download", frac))
+            return cb
+
+        from app.cuda_dlls import ensure_cuda, setup_cuda_dlls
+        cpu = self.asr is None and not ensure_cuda(dl("CUDA (GPU NVIDIA)"))  # .exe com NVIDIA e download falhou: força CPU
         setup_cuda_dlls()  # antes de importar ctranslate2/faster_whisper
 
         def asr():
             from app.asr import Transcriber
-            m = Transcriber(**self._kw["asr"])
+            m = Transcriber(**{**self._kw["asr"], **({"device": "cpu"} if cpu else {})}, on_progress=dl("Whisper", 1))
             m.warmup()
             return m
 
         def mt():
             from app.mt import Translator
-            m = Translator()
+            m = Translator(**({"device": "cpu"} if cpu else {}), on_progress=dl("tradutor", 2))
             m.translate("Hello.")  # esquenta kernels: a 1ª tradução real não paga a inicialização
             return m
 
         def tracker():
             from app.diar import SpeakerTracker
-            return SpeakerTracker(**self._kw["diar"])
+            return SpeakerTracker(**self._kw["diar"], on_progress=dl("modelo de locutores", 3))
 
         def segmenter():
             from app.segmenter import Segmenter

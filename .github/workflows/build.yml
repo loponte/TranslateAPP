@@ -1,0 +1,73 @@
+name: build
+on:   # repo privado: só em tag v* ou manual (poupa minutos do Actions)
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            zip: TranslateAPP-Windows.zip
+            exe: dist/TranslateAPP/TranslateAPP.exe
+          - os: macos-latest
+            zip: TranslateAPP-macOS.zip
+            exe: dist/TranslateAPP.app/Contents/MacOS/TranslateAPP
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Ambiente
+        shell: bash
+        run: |
+          uv venv --python 3.12 .venv
+          if [ "$RUNNER_OS" = Windows ]; then PY=.venv/Scripts/python.exe; else PY=.venv/bin/python; fi
+          echo "PY=$PY" >> "$GITHUB_ENV"
+          grep -v '^nvidia-' requirements.txt > req-ci.txt   # CUDA não vai no pacote nem nos testes
+          uv pip install --python $PY -r req-ci.txt pytest
+      - name: Testes rápidos
+        shell: bash
+        run: |
+          PYTHONPATH=. $PY -m pytest -q tests/test_segmenter.py tests/test_pipeline.py
+          PYTHONPATH=. $PY -m pytest -q tests/test_audio.py   # os testes de captura são manuais: aqui só confere o import
+      - name: Build
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then pwsh scripts/build_win.ps1; else scripts/build_mac.sh; fi
+      - name: Smoke test (--selftest no binário empacotado)
+        shell: bash
+        run: |
+          rc=0
+          "${{ matrix.exe }}" --selftest || rc=$?
+          if [ "$RUNNER_OS" = Windows ]; then F="$LOCALAPPDATA/TranslateAPP/selftest.txt"; else F="$HOME/Library/Application Support/TranslateAPP/selftest.txt"; fi
+          cat "$F" || true   # no .exe windowed o stdout não chega aqui
+          exit $rc
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.zip }}
+          path: dist/${{ matrix.zip }}
+          if-no-files-found: error
+          retention-days: 3
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: zips
+          merge-multiple: true
+      - name: Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "${{ github.ref_name }}" zips/*.zip --repo "${{ github.repository }}" --title "${{ github.ref_name }}" --generate-notes

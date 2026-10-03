@@ -1,6 +1,6 @@
 # TranslateAPP — arquitetura e contratos entre módulos
 
-App Windows que captura o áudio que sai do PC (WASAPI loopback: Discord, Meet, Teams, Zoom…), transcreve **inglês** com **Whisper**, separa por **locutor**, traduz para **pt-BR** e mostra legendas ao vivo numa janela overlay. 100% local (sem APIs externas, sem Claude), foco em **menor latência possível**.
+App (Windows e macOS) que captura o áudio que sai do computador (Windows: WASAPI loopback; macOS: ScreenCaptureKit; Discord, Meet, Teams, Zoom, YouTube…), transcreve **inglês** com **Whisper**, separa por **locutor**, traduz para **pt-BR** e mostra legendas ao vivo numa janela overlay. 100% local (sem APIs externas, sem Claude), foco em **menor latência possível**.
 
 > Whisper só traduz *para* inglês, nunca para português. Por isso: Whisper = transcrição EN; tradução EN→PT-BR = modelo de MT local (OPUS-MT em CTranslate2, licença CC-BY-4.0, atribuição ao Helsinki-NLP/OPUS-MT em `models\mt-en-pt`).
 
@@ -14,6 +14,12 @@ App Windows que captura o áudio que sai do PC (WASAPI loopback: Discord, Meet, 
   `whisper\` (distil-large-v3.5 ~1,5 GB; small.en de reserva), `spk\` (`nemo_en_titanet_small.onnx` 38 MB = embedding; `pyannote-segmentation-3-0.onnx` 6 MB = troca de locutor), `silero_vad.onnx` (copiado do faster-whisper), `mt-en-pt\` (OPUS-MT tc-big, CTranslate2 float16, ~450 MB).
 - Fixtures de teste em `tests\data\` (ver `tests\data\README.md`): `conv_2spk.wav`, `conv_4spk.wav`, `conv_2spk_noisy.wav` (16 kHz mono), `conv_2spk_48k_stereo.wav`, e `<nome>.json` com gabarito `{"voices":…, "turns":[{"speaker","text","start","end"}]}`.
 
+## Plataformas, pastas de dados e empacotamento
+- `app/paths.py`: `DATA_DIR`, `MODELS`, `LOGS`, `SETTINGS`. Empacotado (PyInstaller, `sys.frozen`): `%LOCALAPPDATA%\TranslateAPP` (Win) ou `~/Library/Application Support/TranslateAPP` (mac); rodando do código: a raiz do repo (os testes não mudam). `main.py` faz `os.chdir(DATA_DIR)`, então `models/` e `logs/` relativos continuam valendo.
+- Primeiro uso: modelos ausentes são baixados pelos próprios `ensure_model(..., on_progress)` (asr/mt/diar; o callback só dispara se há download; `None` = sem %). O `Pipeline._load` converte isso em `Status("Baixando <modelo>… (n/4)", "download", progress)`; `ready` limpa. Whisper (HF) é indeterminado. No .exe com NVIDIA, `cuda_dlls.ensure_cuda()` baixa cuBLAS/cuDNN (versões fixas, SHA-256 conferido) do PyPI para `DATA_DIR/cuda.tmp` e renomeia para `cuda` só no fim (`.ok`; `setup_cuda_dlls` só usa a pasta completa); falhou = o pipeline força `device="cpu"` no Whisper e no tradutor; sem GPU = CPU.
+- `app/audio.py` escolhe o backend por `sys.platform` (mesma interface; o `_pump` mono/16 kHz/grade de 32 ms é comum). macOS (`app/audio_mac.py`): dispositivo "Áudio do sistema" = helper Swift `native/sck_audio.swift` (SCStream, só áudio, 48 kHz estéreo f32 no stdout; sai com código 3 sem permissão); os outros = entradas via `sounddevice` (ex.: BlackHole). O helper é compilado com `swiftc` no build e vai em `Contents/Frameworks` do .app. `list_loopback_devices()` no mac devolve "Áudio do sistema" primeiro.
+- Build: `packaging/TranslateAPP.spec` (onedir, sem console; sem nvidia-*, sem modelos), `scripts/build_mac.sh` (swiftc + pyinstaller + `codesign -s -` ad-hoc + zip) e `scripts/build_win.ps1`; CI em `.github/workflows/build.yml` (matriz windows/macos: testes, build, `--selftest`, artefatos; tag `v*` = Release). `main.py --selftest` importa tudo, cria o VAD, lista dispositivos (sem áudio não falha) e abre/fecha um Tk oculto. `multiprocessing.freeze_support()` em `main.py` é obrigatório (senão o resource_tracker reabre o app em cascata).
+
 ## Fluxo
 ```
 LoopbackCapture ─chunks 32 ms (16 kHz mono f32)→ Segmenter ─SegEvent(start|partial|final)→ Pipeline (worker único) ─Update/Status→ queue.Queue → UI (tkinter)
@@ -26,7 +32,7 @@ final:   com texto no último parcial (fala confirmada):
 ```
 
 ## Convenções
-- Áudio interno: `np.float32`, mono, 16 kHz, [-1, 1]. Tempo: `time.monotonic()`. Tipos compartilhados em `app/events.py` (`SR`, `SegEvent`, `Update`, `Status`) — não editar sem avisar.
+- Áudio interno: `np.float32`, mono, 16 kHz, [-1, 1]. Tempo: `time.monotonic()`. Tipos compartilhados em `app/events.py` (`SR`, `SegEvent`, `Update`, `Status`; `Status.level` inclui `"download"` e `Status.progress: float | None` = 0..1 do download) — não editar sem avisar.
 - Código enxuto: stdlib/pacotes instalados primeiro; sem abstrações além do contrato (sem classes base, sem factory, sem config global — cada módulo recebe kwargs com defaults); sem dependência nova sem necessidade.
 - Cada módulo deixa UM check executável (`tests\test_<modulo>.py` com `assert`, ou `if __name__ == "__main__"`).
 - Comentários em pt-BR, curtos. Identificadores em inglês. Textos de UI/status em pt-BR com acentuação correta. Sem emoji em `print` (console cp1252).
@@ -35,12 +41,12 @@ final:   com texto no último parcial (fala confirmada):
 
 | Agente | Arquivos |
 |---|---|
-| A áudio+segmentação | `app/audio.py`, `app/segmenter.py`, `tests/test_segmenter.py`, `tests/test_audio.py` |
+| A áudio+segmentação | `app/audio.py`, `app/audio_mac.py`, `native/`, `app/segmenter.py`, `tests/test_segmenter.py`, `tests/test_audio.py` |
 | B ASR | `app/asr.py`, `tests/bench_asr.py` |
 | C locutores | `app/diar.py`, `tests/eval_diar.py`, `tests/eval_split.py` |
 | D tradução | `app/mt.py`, `scripts/` (conversão de modelo), `tests/eval_mt.py` |
 | E UI | `app/ui.py`, `docs/ui-*.png` |
-| F/G pipeline + integração | `app/pipeline.py`, `app/main.py`, `run.bat`, `setup.ps1`, `README.md`, `ARCHITECTURE.md`, `requirements.txt`, `tests/test_pipeline.py`, `tests/e2e_report.py`, `docs/app-live.png` |
+| F/G pipeline + integração | `app/pipeline.py`, `app/main.py`, `app/paths.py`, `packaging/`, `scripts/build_*`, `.github/`, `run.bat`, `setup.ps1`, `README.md`, `ARCHITECTURE.md`, `requirements.txt`, `tests/test_pipeline.py`, `tests/e2e_report.py`, `docs/app-live.png` |
 
 ## Contratos
 
@@ -85,11 +91,11 @@ class Segmenter:
 ```python
 class Transcriber:
     def __init__(self, *, model: str = "auto", device: str = "auto", compute_type: str = "auto",
-                 language: str = "en", models_dir: str = "models", cpu_threads: int = 0): ...
+                 language: str = "en", models_dir: str = "models", cpu_threads: int = 0, on_progress=None): ...
     def warmup(self) -> None                                   # 2 inferências dummy (beam 1 e final): cuDNN/cuBLAS/alocador
     def transcribe(self, audio: np.ndarray, final: bool = False) -> str   # "" se vazio ou alucinação
     model_name: str; device: str; compute_type: str; beam_final: int = 5
-def ensure_model(models_dir: str = "models", model: str = "auto") -> str   # baixa para models/whisper; idempotente
+def ensure_model(models_dir: str = "models", model: str = "auto", on_progress=None) -> str   # baixa para models/whisper; idempotente
 ```
 - `final=False` (parcial): beam 1, sem timestamps, sem condition_on_previous_text, temperatura 0. `final=True`: beam 5 (mesmo WER e latência que 3; 1 piora no difícil). Idioma fixo `en`.
 - Filtros: áudio < 0,3 s ou RMS < 0,0015, texto vazio, `avg_logprob` < −1, `compression_ratio` > 2,4, alucinações fixas ("thanks for watching"…) e falas comuns ("Thank you.", "bye") só com o modelo inseguro (logprob < −0,3).
@@ -99,11 +105,11 @@ def ensure_model(models_dir: str = "models", model: str = "auto") -> str   # bai
 ```python
 class SpeakerTracker:
     def __init__(self, *, threshold: float = 0.40, min_audio_s: float = 1.0, max_speakers: int = 8,
-                 models_dir: str = "models"): ...
+                 models_dir: str = "models", on_progress=None): ...
     def identify(self, audio: np.ndarray, final: bool) -> int | None
     def segments(self, audio: np.ndarray) -> list[tuple[float, float, int | None]]
     def reset(self) -> None
-def ensure_model(models_dir: str = "models") -> str   # baixa os 2 modelos para models/spk
+def ensure_model(models_dir: str = "models", on_progress=None) -> str   # baixa os 2 modelos para models/spk
 ```
 - Dois modelos ONNX em CPU: **TitaNet-small** (embedding de 192 dims, sherpa-onnx) + **pyannote-segmentation-3.0** (quem fala em cada quadro de ~17 ms; só em `segments()`). Agrupamento online por similaridade de cosseno com centróides (média ponderada pela duração, memória ~60 s). Locutores recebem índice 0-based na ordem de aparição, estável.
 - `identify(final=False)`: palpite sem efeito colateral (não cria locutor nem atualiza centróide); só responde se `sim >= threshold − 0,10` e folga sobre o 2º ≥ 0,10; senão `None` (= "Locutor ?" na UI). `identify(final=True)` com áudio ≥ `min_audio_s`: atribui e atualiza o centróide ou cria locutor (lotado em `max_speakers` → `None`). Áudio < 0,4 s ou silêncio digital → `None`.
@@ -115,10 +121,10 @@ def ensure_model(models_dir: str = "models") -> str   # baixa os 2 modelos para 
 ### `app/mt.py`
 ```python
 class Translator:
-    def __init__(self, *, model_dir: str = "models/mt-en-pt", device: str = "auto"): ...
+    def __init__(self, *, model_dir: str = "models/mt-en-pt", device: str = "auto", on_progress=None): ...
     def translate(self, text: str) -> str          # EN -> PT-BR
     def warmup(self) -> None
-def ensure_model(models_dir: str = "models") -> str  # baixa o zip oficial (~860 MB, SHA-256 fixo), converte e devolve model_dir
+def ensure_model(models_dir: str = "models", on_progress=None) -> str  # baixa o zip oficial (~860 MB, SHA-256 fixo), converte e devolve model_dir
 ```
 - **OPUS-MT tc-big** (Helsinki-NLP, Marian) em CTranslate2 (GPU float16; CPU int8, 8 threads). O token `>>pob<<` força português do Brasil (`>>por<<` mistura Portugal). ~60 ms para 25 palavras na GPU. Conversão sem torch (só ctranslate2 + pyyaml).
 - Entrada pode ser parcial (sem pontuação final, frase cortada, minúsculas): não inventa ponto final. Várias frases → divide e traduz em lote. Glossário mínimo (pré/pós-processamento) para jargão de call/jogo/dev (deploy, pull request, unmute, lag, ping, bug, nerf…), medido em `tests/eval_mt.py --terms`.
@@ -128,7 +134,7 @@ def ensure_model(models_dir: str = "models") -> str  # baixa o zip oficial (~860
 class Pipeline:
     def __init__(self, out: queue.Queue, *, segmenter=None, transcriber=None, tracker=None, translator=None,
                  capture_factory=None, seg_kw=None, asr_kw=None, diar_kw=None, piece_pad_s: float = 0.0,
-                 log_path=ROOT/"logs"/"latency.csv"): ...   # `out` recebe Update | Status
+                 log_path=LOGS/"latency.csv"): ...   # `out` recebe Update | Status
     def start(self, device: str | None = None) -> None      # volta já; modelos e captura em thread
     def stop(self) -> None                                   # idempotente, <= ~1 s
 EXTRA_ID = 1_000_000

@@ -10,7 +10,23 @@ a legenda definitiva sai ~0,45 s depois da frase terminar, até ~0,7 s quando a 
 > para CTranslate2 em `models\mt-en-pt` (a origem, a licença e a atribuição ficam nessa pasta: `info.json`, `LICENSE`, `README.md`).
 > Os outros modelos (Whisper, VAD, locutores) têm as licenças dos próprios autores.
 
-## Instalar e rodar
+## Baixar pronto (sem instalar Python)
+Na página de **Releases** do GitHub há dois zips (gerados pelo Actions). Os modelos **não** vêm no pacote: na 1ª abertura o app
+baixa tudo para a pasta de dados (Windows `%LOCALAPPDATA%\TranslateAPP`, macOS `~/Library/Application Support/TranslateAPP`)
+mostrando o progresso na janela (Whisper, tradutor ~860 MB, locutores). Logs em `logs\app.log` dessa pasta.
+- **Windows (.exe):** baixe `TranslateAPP-Windows.zip`, extraia e abra `TranslateAPP\TranslateAPP.exe`. Com GPU NVIDIA, o app
+  baixa também cuBLAS/cuDNN (~1,3 GB) na 1ª vez; sem GPU (ou se falhar) roda na CPU com o Whisper small.en.
+- **macOS (.app, só Apple Silicon/arm64 — Mac Intel não é suportado; macOS 13+):** baixe `TranslateAPP-macOS.zip`, extraia e arraste `TranslateAPP.app` para Aplicativos.
+  O app é assinado só ad-hoc (sem conta de desenvolvedor): na 1ª vez, clique com o botão direito → **Abrir** → *Abrir mesmo assim*
+  (ou Ajustes do Sistema › Privacidade e Segurança › *Abrir mesmo assim*). O áudio do sistema vem do ScreenCaptureKit: libere o
+  app em **Ajustes do Sistema › Privacidade e Segurança › Gravação de Tela e Áudio do Sistema** e reabra (não grava a tela).
+  Sem permissão a barra de status avisa. Alternativa sem permissão: escolha uma entrada de áudio (ex.: BlackHole) em *Dispositivo*.
+  Cada build novo pode pedir a permissão de novo (assinatura ad-hoc). Na CPU o Whisper é o small.en (mais lento que na GPU).
+- **Gerar você mesmo:** `scripts/build_mac.sh` (macOS; precisa de uv e Xcode CLT) → `dist/TranslateAPP.app` + zip;
+  `scripts\build_win.ps1` (Windows) → `dist\TranslateAPP-Windows.zip`. O CI (`.github/workflows/build.yml`) faz os dois, roda
+  `TranslateAPP --selftest` no binário e, numa tag `v*`, anexa os zips a uma Release.
+
+## Instalar e rodar (a partir do código, Windows)
 1. **Uma vez:** botão direito em `setup.ps1` → *Executar com o PowerShell* (ou `powershell -ExecutionPolicy Bypass -File .\setup.ps1`).
    Cria o `.venv` (Python 3.12 via uv), instala o `requirements.txt`, cria o atalho `TranslateAPP.lnk` e baixa os modelos para
    `models\` (alguns GB: Whisper distil-large-v3.5 e small.en, locutores, VAD, tradução). Pode repetir à vontade (só completa o que falta).
@@ -20,7 +36,7 @@ a legenda definitiva sai ~0,45 s depois da frase terminar, até ~0,7 s quando a 
    *Carregando modelos…* → *Pronto — escutando …*. Com `AUTOSTART = False` ele espera o clique em **Iniciar**.
 
 ## Botões
-- **Dispositivo** — qual saída de áudio escutar. *Padrão do Windows* acompanha a saída padrão (se ela mudar, a captura reabre sozinha); escolher um nome fixa aquela saída. **Atualizar** relê a lista (fone novo, por exemplo).
+- **Dispositivo** — qual saída de áudio escutar (no macOS: *Áudio do sistema* ou uma entrada). *Padrão do Windows* acompanha a saída padrão (se ela mudar, a captura reabre sozinha); escolher um nome fixa aquela saída. **Atualizar** relê a lista (fone novo, por exemplo).
 - **Iniciar / Parar** — Iniciar começa uma conversa nova (os locutores recomeçam em “Locutor 1”). Parar libera o áudio; os modelos continuam carregados.
 - **Limpar** (Ctrl+L) apaga a tela. **Salvar…** (Ctrl+S) grava um `.txt` com horário, locutor, português e inglês.
 - **A− / A+** tamanho da letra · **Mostrar inglês** · **Sempre no topo** · **Opacidade**. As preferências ficam em `settings.json`.
