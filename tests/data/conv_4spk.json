@@ -1,0 +1,220 @@
+{
+  "voices": {
+    "A": "en-US-GuyNeural",
+    "B": "en-US-AriaNeural",
+    "C": "en-GB-RyanNeural",
+    "D": "en-AU-NatashaNeural"
+  },
+  "turns": [
+    {
+      "speaker": "A",
+      "text": "Alright everyone, let's get started. Thanks for joining.",
+      "start": 0.6,
+      "end": 3.84
+    },
+    {
+      "speaker": "B",
+      "text": "Morning, Alex.",
+      "start": 4.19,
+      "end": 5.34
+    },
+    {
+      "speaker": "C",
+      "text": "Morning, all.",
+      "start": 5.59,
+      "end": 6.71
+    },
+    {
+      "speaker": "D",
+      "text": "Hi, everyone.",
+      "start": 6.91,
+      "end": 7.99
+    },
+    {
+      "speaker": "A",
+      "text": "So, first on the agenda, the mobile release. Sarah, can you give us a quick update?",
+      "start": 8.44,
+      "end": 13.36
+    },
+    {
+      "speaker": "B",
+      "text": "Sure. We closed forty two tickets this sprint, which is our best number so far, and the crash rate dropped from two point one percent to zero point six after we fixed the memory leak in the image loader. The only blocker left is the payment screen on older Android phones, and Jake thinks he can have a fix ready by Wednesday.",
+      "start": 13.96,
+      "end": 32.38
+    },
+    {
+      "speaker": "A",
+      "text": "Great. Is Wednesday realistic?",
+      "start": 32.68,
+      "end": 34.82
+    },
+    {
+      "speaker": "B",
+      "text": "I think so.",
+      "start": 35.62,
+      "end": 36.47
+    },
+    {
+      "speaker": "C",
+      "text": "Sounds good.",
+      "start": 36.67,
+      "end": 37.41
+    },
+    {
+      "speaker": "A",
+      "text": "Okay. James, what's the status on the backend?",
+      "start": 37.91,
+      "end": 41.21
+    },
+    {
+      "speaker": "C",
+      "text": "The new search API is finally in staging, and the response time went down from nine hundred milliseconds to about two hundred. We still need to run a load test with ten thousand concurrent users before we deploy to production, and I'd like to do it on Thursday night when traffic is lowest, so nobody gets paged at three in the morning.",
+      "start": 41.56,
+      "end": 59.07
+    },
+    {
+      "speaker": "D",
+      "text": "Makes sense.",
+      "start": 59.77,
+      "end": 60.59
+    },
+    {
+      "speaker": "A",
+      "text": "Any risk we'd miss the October fourteenth date?",
+      "start": 60.89,
+      "end": 63.31
+    },
+    {
+      "speaker": "C",
+      "text": "Only if the test fails.",
+      "start": 63.56,
+      "end": 64.95
+    },
+    {
+      "speaker": "A",
+      "text": "Fair enough. Olivia, you're up.",
+      "start": 65.5,
+      "end": 67.62
+    },
+    {
+      "speaker": "D",
+      "text": "Thanks. We surveyed twelve hundred users last week, and the main complaint is still the onboarding flow, which takes about four minutes. People love the new dark mode, though, and our score went up from thirty eight to forty seven. I suggest we cut onboarding to three screens and translate the whole app into Portuguese and Spanish before launch.",
+      "start": 68.02,
+      "end": 88.36
+    },
+    {
+      "speaker": "B",
+      "text": "Love that.",
+      "start": 89.26,
+      "end": 89.96
+    },
+    {
+      "speaker": "C",
+      "text": "How much would the translation cost?",
+      "start": 90.26,
+      "end": 92.06
+    },
+    {
+      "speaker": "D",
+      "text": "About twelve thousand dollars for both languages, and the vendor needs two weeks.",
+      "start": 92.51,
+      "end": 97.11
+    },
+    {
+      "speaker": "A",
+      "text": "Two weeks is tight. Can we start with Portuguese only?",
+      "start": 97.31,
+      "end": 100.4
+    },
+    {
+      "speaker": "D",
+      "text": "Yes, that works.",
+      "start": 101.05,
+      "end": 102.26
+    },
+    {
+      "speaker": "B",
+      "text": "Perfect.",
+      "start": 102.61,
+      "end": 103.2
+    },
+    {
+      "speaker": "A",
+      "text": "Good. Next, a quick one on hiring. We have two open positions on the QA team, and the budget was approved yesterday.",
+      "start": 103.7,
+      "end": 110.96
+    },
+    {
+      "speaker": "C",
+      "text": "Finally. We really need them.",
+      "start": 111.26,
+      "end": 113.04
+    },
+    {
+      "speaker": "B",
+      "text": "Should I post the job ads today?",
+      "start": 113.79,
+      "end": 115.39
+    },
+    {
+      "speaker": "A",
+      "text": "Yes, please, and send me the link so I can share it with the team leads.",
+      "start": 115.64,
+      "end": 119.22
+    },
+    {
+      "speaker": "B",
+      "text": "Will do.",
+      "start": 119.62,
+      "end": 120.31
+    },
+    {
+      "speaker": "D",
+      "text": "Also, the launch event in Sydney is confirmed for November second, so we need the final build a week before that.",
+      "start": 120.66,
+      "end": 126.91
+    },
+    {
+      "speaker": "A",
+      "text": "Noted. That puts the code freeze on October twenty sixth.",
+      "start": 127.16,
+      "end": 130.63
+    },
+    {
+      "speaker": "C",
+      "text": "Works for me.",
+      "start": 130.83,
+      "end": 131.59
+    },
+    {
+      "speaker": "A",
+      "text": "Okay, so to recap. Sarah owns the payment fix, James runs the load test on Thursday, and Olivia sends the Portuguese strings to the vendor by Monday. Anything else?",
+      "start": 132.04,
+      "end": 141.43
+    },
+    {
+      "speaker": "C",
+      "text": "Nothing from me.",
+      "start": 142.03,
+      "end": 142.92
+    },
+    {
+      "speaker": "B",
+      "text": "Same here.",
+      "start": 143.22,
+      "end": 143.94
+    },
+    {
+      "speaker": "D",
+      "text": "All good.",
+      "start": 144.74,
+      "end": 145.31
+    },
+    {
+      "speaker": "A",
+      "text": "Thanks, everybody. Talk next week.",
+      "start": 145.51,
+      "end": 147.85
+    }
+  ]
+}

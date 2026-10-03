@@ -1,0 +1,134 @@
+{
+  "voices": {
+    "A": "en-US-GuyNeural",
+    "B": "en-US-JennyNeural"
+  },
+  "turns": [
+    {
+      "speaker": "A",
+      "text": "Hey Dana, you there? Can you hear me okay?",
+      "start": 0.6,
+      "end": 3.22
+    },
+    {
+      "speaker": "B",
+      "text": "Yeah, loud and clear. Sorry I'm late, my build took forever.",
+      "start": 3.62,
+      "end": 7.31
+    },
+    {
+      "speaker": "A",
+      "text": "No worries. So, about Project Nebula, we need to lock the plan before Friday.",
+      "start": 7.96,
+      "end": 13.05
+    },
+    {
+      "speaker": "B",
+      "text": "Right, got it.",
+      "start": 13.35,
+      "end": 14.42
+    },
+    {
+      "speaker": "A",
+      "text": "Okay, three things are left. First, the matchmaking API still times out after about thirty seconds. Second, there's a nasty bug in the inventory screen. And third, Marcus is out until Monday.",
+      "start": 15.32,
+      "end": 26.26
+    },
+    {
+      "speaker": "B",
+      "text": "Wait, what?",
+      "start": 26.76,
+      "end": 27.72
+    },
+    {
+      "speaker": "A",
+      "text": "Yeah, his flight got moved. His pull request for the inventory fix is still waiting for review.",
+      "start": 28.72,
+      "end": 34.19
+    },
+    {
+      "speaker": "B",
+      "text": "Okay, I'll review it right after this call. Honestly, I'm more worried about the lag on the Frankfurt servers.",
+      "start": 34.54,
+      "end": 40.42
+    },
+    {
+      "speaker": "A",
+      "text": "Yeah.",
+      "start": 41.17,
+      "end": 41.6
+    },
+    {
+      "speaker": "B",
+      "text": "Players in Brazil are seeing a ping of around two hundred and fifty milliseconds, which is way too high for a shooter.",
+      "start": 41.85,
+      "end": 47.8
+    },
+    {
+      "speaker": "A",
+      "text": "That's rough. Can we spin up another region on AWS, maybe one in Sao Paulo?",
+      "start": 48.35,
+      "end": 53.19
+    },
+    {
+      "speaker": "B",
+      "text": "It would cost around four hundred dollars a month, but I think it's worth it. We can test it on staging first.",
+      "start": 54.04,
+      "end": 59.66
+    },
+    {
+      "speaker": "A",
+      "text": "Perfect. And the new boss? Players say his fire attack is way too strong.",
+      "start": 60.11,
+      "end": 64.72
+    },
+    {
+      "speaker": "B",
+      "text": "Yeah, I'll nerf it by fifteen percent and bump the cooldown from eight seconds to twelve.",
+      "start": 65.02,
+      "end": 69.6
+    },
+    {
+      "speaker": "A",
+      "text": "Nice. Okay, the deploy is scheduled for Friday at six p.m. Pacific time. And we still need to write the patch notes for version two point four.",
+      "start": 70.3,
+      "end": 78.25
+    },
+    {
+      "speaker": "B",
+      "text": "Hold on, Friday at six? That's three in the morning for Tom in Berlin.",
+      "start": 78.85,
+      "end": 82.88
+    },
+    {
+      "speaker": "A",
+      "text": "Oh, right.",
+      "start": 83.83,
+      "end": 84.71
+    },
+    {
+      "speaker": "B",
+      "text": "Let's do Thursday at noon instead, and keep Friday as a backup.",
+      "start": 85.06,
+      "end": 88.63
+    },
+    {
+      "speaker": "A",
+      "text": "Works for me. I'll update the calendar and post it in the channel.",
+      "start": 89.13,
+      "end": 92.72
+    },
+    {
+      "speaker": "B",
+      "text": "Awesome. Talk later?",
+      "start": 93.52,
+      "end": 94.8
+    },
+    {
+      "speaker": "A",
+      "text": "Yep, see you tomorrow. And don't forget to push your branch before you log off.",
+      "start": 95.05,
+      "end": 99.22
+    }
+  ]
+}
