@@ -11,10 +11,10 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            zip: TranslateAPP-Windows.zip
+            asset: dist/TranslateAPP-Setup.exe
             exe: dist/TranslateAPP/TranslateAPP.exe
           - os: macos-latest
-            zip: TranslateAPP-macOS.zip
+            asset: dist/TranslateAPP.dmg
             exe: dist/TranslateAPP.app/Contents/MacOS/TranslateAPP
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -50,8 +50,8 @@ jobs:
           exit $rc
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.zip }}
-          path: dist/${{ matrix.zip }}
+          name: ${{ runner.os }}-installer
+          path: ${{ matrix.asset }}
           if-no-files-found: error
           retention-days: 3
 
@@ -65,9 +65,9 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          path: zips
+          path: assets
           merge-multiple: true
       - name: Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "${{ github.ref_name }}" zips/*.zip --repo "${{ github.repository }}" --title "${{ github.ref_name }}" --generate-notes
+        run: gh release create "${{ github.ref_name }}" assets/TranslateAPP-Setup.exe assets/TranslateAPP.dmg --repo "${{ github.repository }}" --title "${{ github.ref_name }}" --generate-notes

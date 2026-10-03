@@ -1,4 +1,4 @@
-# Gera dist\TranslateAPP\TranslateAPP.exe e dist\TranslateAPP-Windows.zip. Precisa de uv. Rode da raiz ou de qualquer pasta.
+# Gera dist\TranslateAPP\TranslateAPP.exe e o instalador dist\TranslateAPP-Setup.exe (Inno Setup). Precisa de uv e ISCC. Rode da raiz ou de qualquer pasta.
 # Sem as nvidia-* (o .exe baixa cuBLAS/cuDNN no 1º uso, só se houver GPU NVIDIA).
 $ErrorActionPreference = "Stop"
 Set-Location (Split-Path $PSScriptRoot)
@@ -9,6 +9,9 @@ Get-Content requirements.txt | Where-Object { $_ -notmatch "^nvidia-" } | Set-Co
 uv pip install --python $py -r $req pyinstaller; if ($LASTEXITCODE) { throw "uv pip install falhou" }
 & $py -m PyInstaller packaging\TranslateAPP.spec --noconfirm --distpath dist --workpath build\pyi
 if ($LASTEXITCODE) { throw "PyInstaller falhou" }
-if (Test-Path dist\TranslateAPP-Windows.zip) { Remove-Item dist\TranslateAPP-Windows.zip }
-Compress-Archive -Path dist\TranslateAPP -DestinationPath dist\TranslateAPP-Windows.zip
-Write-Host "ok: dist\TranslateAPP-Windows.zip"
+$iscc = (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source
+if (-not $iscc) { $iscc = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe", "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1 }
+if (-not $iscc) { throw "Inno Setup (ISCC.exe) não encontrado: instale com 'choco install innosetup' ou 'winget install JRSoftware.InnoSetup'" }
+& $iscc /Q packaging\TranslateAPP.iss
+if ($LASTEXITCODE) { throw "Inno Setup falhou" }
+Write-Host "ok: dist\TranslateAPP-Setup.exe"
