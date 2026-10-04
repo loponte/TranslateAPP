@@ -2,9 +2,12 @@
 
 Como funciona
 - Cada trecho vira um embedding L2-normalizado (TitaNet-small, 192 dims); compara-se com os centróides (média dos
-  embeddings ponderada pela duração, memória ~CAP_S s). Índice 0-based na ordem de aparição, estável (sem fusão).
+  embeddings ponderada pela duração, memória ~CAP_S s). Sem fusão automática (testada: piora até -57 pts).
 - final=True com áudio >= min_audio_s: sim >= threshold -> atribui e atualiza o centróide; senão cria locutor
-  (até max_speakers; lotado -> None).
+  PROVISÓRIO: sem id (None = "?") até somar confirm_s de fala; aí ganha o próximo id (0, 1, ... na ordem de
+  confirmação, nunca reaproveitado na sessão). Corta os fantasmas (fala solta que não casa): na AMI com canal de
+  call, rótulos por sessão 8,0 -> 6,0, fantasmas 17 -> 10. Lotado (max_speakers sem contar os fixados): descarta
+  o provisório mais antigo; sem provisório -> None.
 - Palpite (final=False) e áudio curto (< min_audio_s): NUNCA cria nem atualiza. Só responde se
   sim >= threshold - SLACK e sim - (2º colocado) >= MARGIN (em trecho curto é a folga sobre o 2º que separa bem,
   não o valor absoluto); senão None = "?" na UI. Abaixo de MIN_S de áudio (ou silêncio): None direto.
@@ -17,14 +20,27 @@ Calibrar `threshold` (a escala de cosseno depende do modelo; TitaNet-small: 0,40
      a mesma pessoa em canais diferentes dá sim < threshold. Se aparecem locutores fantasmas (a mesma pessoa com
      2 rótulos) -> BAIXE o threshold; se duas pessoas viraram uma só (vozes parecidas, áudio ruim) -> SUBA.
      Passos de 0,05. Trocou de mic/canal no meio da call? reset().
-- Limites: sem fusão de centróides (não melhorou nenhuma métrica: junta vozes parecidas antes de pegar o fantasma);
-  lotado em max_speakers não há despejo (reset() zera).
+
+Perfis (opt-in, só locais: voz é dado biométrico, LGPD art. 5º, II) — comandos da UI, na thread do identify:
+- pin(id) fixa a voz e grava já em profiles_path (speakers.json: {"model", "profiles": [{"id", "emb", "secs"}]});
+  reset() mantém os fixados com os mesmos ids (ids novos começam depois do maior fixado) e um tracker novo os lê:
+  a mesma voz volta com o mesmo id já na 1ª fala >= min_audio_s. save() regrava com o centróide atual (o pipeline
+  chama no fim da sessão). merge(src, dst) junta os centróides (src some; a fixação de src passa para dst).
+  forget(id|None) tira do arquivo (sem fixados o arquivo é apagado). Outro MODEL no arquivo = perfis ignorados.
+- Perfis dão continuidade (nome/id entre sessões), não acurácia; trocar de headset entre dias atrapalha.
+
+ERes2Net (3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx, 26 MB, mesmo release): avaliado e NÃO adotado.
+  Receita testada: MAX_S=3, MIN_PIECE=0.7 (sem isso, falso split 3,4 % nas vozes reais), threshold 0,35. Resolve
+  a pessoa partida em call (AMI call: acc 87,5 -> 91,7 %, partidas 7 -> 3; 0 com MAX_S=4), mas junta as vozes
+  B/D do conv_4spk (68,6 % por turno, 78,8 % por tempo, contra 80,0 % / 95,9 % do TitaNet) e segments() de 7-9 s
+  leva 93 ms com THREADS=2 (74 ms com 4) contra 48 ms. Para trocar: MODEL, MAX_S, MIN_PIECE, THREADS e threshold.
 
 Troca de locutor dentro da utterance: segments(audio), só para utterances FINAIS
 - Devolve [(início_s, fim_s, locutor)] relativos ao começo de `audio`, em ordem, ladrilhando [0, duração]; trechos
   vizinhos têm locutores diferentes. Utterance de 1 locutor -> exatamente 1 trecho, rotulado pelo mesmo critério e
   centróides do identify(audio, True) (idêntico a ele quando não há candidato a corte). Locutor None = voz diferente
-  da vizinha mas sem identidade ainda (trecho curto, tabela cheia): mostrar "?" e não herdar o rótulo do vizinho.
+  da vizinha mas sem identidade ainda (trecho curto, provisório, tabela cheia): mostrar "?" e não herdar o rótulo do
+  vizinho.
 - Uso no pipeline, no lugar de identify(ev.audio, True) no final (o parcial segue com identify(..., False)):
       segs = tracker.segments(ev.audio)
       len(segs) == 1: spk = segs[0][2] e o fluxo de hoje (transcreve o áudio inteiro);
@@ -50,6 +66,7 @@ Troca de locutor dentro da utterance: segments(audio), só para utterances FINAI
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import tarfile
@@ -141,10 +158,43 @@ class _Piece:
         self.v = o.v if self.v is None else self.v if o.v is None else self.v + o.v
 
 
+def _load(path) -> list[dict]:
+    """Perfis do speakers.json; [] se não existe, se está corrompido ou se foi gravado com outro modelo."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            d = json.load(f)
+        return [p for p in d["profiles"] if {"id", "emb", "secs"} <= p.keys()] if d.get("model") == MODEL else []
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return []
+
+
+def _write(path, profiles: list[dict]) -> None:
+    """Grava os perfis (atômico); lista vazia apaga o arquivo (voz é dado biométrico: nada fica para trás)."""
+    if not profiles:
+        if os.path.exists(path):
+            os.remove(path)
+        return
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    with open(f"{path}.tmp", "w", encoding="utf-8") as f:
+        json.dump({"model": MODEL, "profiles": profiles}, f)
+    os.replace(f"{path}.tmp", path)
+
+
+def saved_speakers(path) -> list[int]:
+    """Ids das vozes salvas (só lê o json)."""
+    return [int(p["id"]) for p in _load(path)]
+
+
+def forget_saved(path, spk: int | None = None) -> None:
+    """Tira a voz `spk` do arquivo (None = todas: apaga o arquivo)."""
+    _write(path, [] if spk is None else [p for p in _load(path) if p["id"] != spk])
+
+
 class SpeakerTracker:
     def __init__(self, *, threshold: float = 0.40, min_audio_s: float = 1.0, max_speakers: int = 8,
-                 models_dir: str = "models", on_progress=None):
+                 confirm_s: float = 3.0, models_dir: str = "models", profiles_path: str | None = None, on_progress=None):
         self.threshold, self.min_audio_s, self.max_speakers = threshold, min_audio_s, max_speakers
+        self.confirm_s, self.profiles_path = confirm_s, profiles_path
         cfg = sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=ensure_model(models_dir, on_progress), num_threads=THREADS)
         self._ex = sherpa_onnx.SpeakerEmbeddingExtractor(cfg)
         self._embed((np.random.default_rng(0).standard_normal(SR) * 0.05).astype(np.float32))  # aquece
@@ -153,11 +203,72 @@ class SpeakerTracker:
         self._seg = ort.InferenceSession(os.path.join(models_dir, "spk", SEG_MODEL), o, providers=["CPUExecutionProvider"])
         self._seg.run(None, {"x": np.zeros((1, 1, SR), np.float32)})  # aquece
         self._pool = ThreadPoolExecutor(POOL)
+        # tabela de locutores, listas paralelas (índice interno != id exibido):
+        self._sum: list[np.ndarray] = []  # soma dos embeddings ponderada pela duração
+        self._w: list[float] = []         # peso dessa soma (s; esquece o excedente de CAP_S)
+        self._tot: list[float] = []       # fala total (s), para confirmar o provisório
+        self._lab: list[int | None] = []  # id exibido; None = provisório (sem id até somar confirm_s)
+        self._pin: set[int] = set()       # ids fixados (vão para o arquivo; sobrevivem ao reset)
+        for p in _load(profiles_path) if profiles_path else []:
+            if len(p["emb"]) != self._ex.dim:  # arquivo mexido à mão: ignora o perfil em vez de quebrar a sessão
+                continue
+            s = max(float(p["secs"]), self.min_audio_s)
+            self._sum.append(_unit(np.asarray(p["emb"], np.float32)) * s)
+            self._w.append(s)
+            self._tot.append(s)
+            self._lab.append(int(p["id"]))
+            self._pin.add(int(p["id"]))
         self.reset()
 
     def reset(self) -> None:
-        self._sum: list[np.ndarray] = []  # soma ponderada dos embeddings de cada locutor (índice = rótulo)
-        self._w: list[float] = []         # peso acumulado de cada um (s)
+        """Sessão nova: só os fixados continuam (mesmos ids); ids novos começam depois do maior fixado."""
+        keep = [j for j, k in enumerate(self._lab) if k in self._pin]
+        for L in (self._sum, self._w, self._tot, self._lab):
+            L[:] = [L[j] for j in keep]
+        self._next = max(self._pin, default=-1) + 1
+
+    # ---- perfis (comandos da UI; mesma thread do identify) ----
+    def _drop(self, j: int) -> None:
+        for L in (self._sum, self._w, self._tot, self._lab):
+            L.pop(j)
+
+    def pin(self, spk: int) -> bool:
+        """Fixa a voz `spk` (lembrar entre sessões) e grava já. False se o id não existe."""
+        if spk is None or spk not in self._lab:
+            return False
+        self._pin.add(spk)
+        self.save()
+        return True
+
+    def merge(self, src: int, dst: int) -> None:
+        """Junta src em dst (centróide ponderado pela duração); src some para sempre (id não é reaproveitado)."""
+        if src == dst or src not in self._lab or dst not in self._lab:
+            return
+        i, j = self._lab.index(src), self._lab.index(dst)
+        self._sum[j] = self._sum[j] + self._sum[i]
+        self._w[j] += self._w[i]
+        self._tot[j] += self._tot[i]
+        if src in self._pin:  # quem fixou src quer lembrar essa voz: passa para dst
+            self._pin.discard(src)
+            self._pin.add(dst)
+        self._drop(i)
+        if dst in self._pin:
+            self.save()
+
+    def forget(self, spk: int | None = None) -> None:
+        """Esquece a voz fixada `spk` (None = todas): sai do arquivo; na sessão vira um locutor comum (some no reset)."""
+        if spk is None:
+            self._pin.clear()
+        else:
+            self._pin.discard(spk)
+        if self.profiles_path:
+            forget_saved(self.profiles_path, spk)
+
+    def save(self) -> None:
+        """Grava os fixados com o centróide atual (sem profiles_path: nada)."""
+        if self.profiles_path:
+            _write(self.profiles_path, [{"id": k, "emb": [round(float(x), 5) for x in _unit(self._sum[j])],
+                                         "secs": round(self._w[j], 2)} for j, k in enumerate(self._lab) if k in self._pin])
 
     def _embed(self, audio: np.ndarray) -> np.ndarray | None:
         """Embedding L2-normalizado do miolo (<= MAX_S) do áudio; None se inválido."""
@@ -190,26 +301,37 @@ class SpeakerTracker:
         return j, float(sims[j]), float(sims[j] - (np.partition(sims, -2)[-2] if len(sims) > 1 else 0.0))
 
     def _guess(self, e: np.ndarray) -> int | None:
-        """Palpite sem efeito colateral: o locutor conhecido, se casar com folga (regra do identify parcial)."""
+        """Palpite sem efeito colateral: o locutor confirmado (índice), se casar com folga (regra do identify parcial)."""
         j, s, gap = self._match(e)
-        return j if j is not None and s >= self.threshold - SLACK and gap >= MARGIN else None
+        return j if j is not None and s >= self.threshold - SLACK and gap >= MARGIN and self._lab[j] is not None else None
 
     def _assign(self, e: np.ndarray, d: float, full: bool) -> int | None:
-        """Rótulo do embedding e (d s de áudio). full: pode criar locutor / atualizar centróide; senão só palpita."""
-        d = min(d, MAX_S)                       # peso = áudio realmente embutido
+        """Id exibido do embedding e (d s de áudio). full: pode criar locutor / atualizar centróide; senão só palpita.
+        Locutor novo nasce provisório (None) e ganha id ao somar confirm_s de fala."""
+        dw = min(d, MAX_S)                      # peso = áudio realmente embutido
         j, s, gap = self._match(e)
         if j is not None and (s >= self.threshold if full else (s >= self.threshold - SLACK and gap >= MARGIN)):
             if full:
                 k = min(1.0, CAP_S / self._w[j])  # esquece o excedente antigo (memória limitada)
-                self._sum[j] = self._sum[j] * k + e * d
-                self._w[j] = self._w[j] * k + d
-            return j
-        # ponytail: sem fusão/despejo de centróides (lotado => None); fusão testada e não melhorou, despejo LRU se precisar
-        if full and len(self._sum) < self.max_speakers:
-            self._sum.append(e * d)
-            self._w.append(d)
-            return len(self._sum) - 1
-        return None
+                self._sum[j] = self._sum[j] * k + e * dw
+                self._w[j] = self._w[j] * k + dw
+                self._tot[j] += d
+        elif not full:
+            return None
+        else:
+            # ponytail: sem fusão automática (testada: piora); lotado => descarta o provisório mais antigo, senão None
+            if len(self._lab) - len(self._pin) >= self.max_speakers:
+                if None not in self._lab:
+                    return None
+                self._drop(self._lab.index(None))
+            self._sum.append(e * dw)
+            self._w.append(dw)
+            self._tot.append(d)
+            self._lab.append(None)
+            j = len(self._lab) - 1
+        if full and self._lab[j] is None and self._tot[j] >= self.confirm_s:
+            self._lab[j], self._next = self._next, self._next + 1
+        return self._lab[j]
 
     # ---- troca de locutor dentro da utterance ----
     def _atoms(self, audio: np.ndarray) -> list[tuple[float, float, int]]:

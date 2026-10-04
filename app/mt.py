@@ -1,28 +1,34 @@
-"""Tradução EN -> PT-BR 100% local: OPUS-MT tc-big (Marian) rodando em CTranslate2.
+"""Tradução EN <-> PT-BR 100% local: OPUS-MT (Marian) rodando em CTranslate2, um modelo por direção (PAIRS).
 
-Escolhido por medição (tests/eval_mt.py): melhor qualidade dentro do orçamento de latência (~60 ms p/ 25 palavras na GPU).
-O token >>pob<< força português do Brasil (>>por<< mistura Portugal; NLLB/MADLAD vazam "estás a fazer", "ecrã").
-Uso: ensure_model() uma vez (baixa ~860 MB e converte para models/mt-en-pt) e depois Translator().translate(texto)."""
+Escolhidos por medição (tests/eval_mt.py; --dir pten para PT->EN): melhor qualidade dentro do orçamento de latência.
+- en-pt: OPUS-MT tc-big (~60 ms p/ 25 palavras na GPU). O token >>pob<< força português do Brasil (>>por<< mistura
+  Portugal; NLLB/MADLAD vazam "estás a fazer", "ecrã"). Com glossário de call/jogo/dev (_PRE/_POST).
+- pt-en: OPUS-MT por-eng (Tatoeba opus+bt 2021, transformer base, 148 MB): 19/66 ms (8/25 palavras), chrF 78,4,
+  COMET 0,925. O roa-eng tc-big não foi melhor; NLLB tem licença NC; MADLAD é 10-25x mais lento.
+Uso: ensure_model(pair=...) uma vez (baixa e converte para models/mt-<par>) e depois Translator(pair=...).translate(texto)."""
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
 import shutil
 import tempfile
 import unicodedata
-import urllib.request
 import zipfile
 from pathlib import Path
 
 from app.cuda_dlls import setup_cuda_dlls
+from app.paths import download
 
-# Modelo oficial do Helsinki-NLP (Tatoeba-MT, CC-BY-4.0; atribuição: OPUS-MT). Marian npz -> CTranslate2 aqui mesmo,
-# só com ctranslate2+pyyaml (sem torch). Zip imutável (data no nome) e com checksum fixado.
-ZIP_URL = "https://object.pouta.csc.fi/Tatoeba-MT-models/eng-por/opusTCv20210807+bt_transformer-big_2022-03-13.zip"
-ZIP_SHA256 = "62aeb8916c2463351a2dd8d1ea51fcf3929fb3daab7261dcae8d5599e886c008"
-LANG = ">>pob<<"
+# Modelos oficiais do Helsinki-NLP (Tatoeba-MT, CC-BY-4.0; atribuição: OPUS-MT). Marian npz -> CTranslate2 aqui mesmo,
+# só com ctranslate2+pyyaml (sem torch). Zips imutáveis (data no nome) e com checksum fixado.
+# par -> (url do zip, sha256, token de idioma no início da frase | None, pasta em models/)
+PAIRS = {
+    "en-pt": ("https://object.pouta.csc.fi/Tatoeba-MT-models/eng-por/opusTCv20210807+bt_transformer-big_2022-03-13.zip",
+              "62aeb8916c2463351a2dd8d1ea51fcf3929fb3daab7261dcae8d5599e886c008", ">>pob<<", "mt-en-pt"),  # ~860 MB
+    "pt-en": ("https://object.pouta.csc.fi/Tatoeba-MT-models/por-eng/opus+bt-2021-04-30.zip",
+              "ead25b7241821c1d83978e8ec62abdeebf4e9c7ff1357ad58e4a915e5e050a5f", None, "mt-pt-en"),  # ~280 MB
+}
 _FILES = ("model.bin", "config.json", "shared_vocabulary.json", "source.spm", "target.spm")
 
 _SPLIT = re.compile(r"(?<=[.!?…])\s+")
@@ -91,10 +97,11 @@ _POST = [  # (condição na fonte | None, padrão na saída, troca)
 ]
 
 
-def ensure_model(models_dir: str = "models", on_progress=None) -> str:
-    """Idempotente: baixa o modelo oficial (~860 MB, só na 1ª vez), converte e guarda em <models_dir>/mt-en-pt.
+def ensure_model(models_dir: str = "models", pair: str = "en-pt", on_progress=None) -> str:
+    """Idempotente: baixa o modelo oficial do par (só na 1ª vez), converte e guarda em <models_dir>/mt-<par>.
     on_progress(frac | None): só quando há download (None = sem % conhecido, ex.: convertendo)."""
-    d = Path(models_dir) / "mt-en-pt"
+    url, sha, lang, sub = PAIRS[pair]
+    d = Path(models_dir) / sub
     if all((d / f).exists() for f in _FILES):
         return str(d)
     setup_cuda_dlls()  # antes de importar o ctranslate2
@@ -103,17 +110,8 @@ def ensure_model(models_dir: str = "models", on_progress=None) -> str:
     try:
         with tempfile.TemporaryDirectory(dir=d.parent) as tmp:  # tudo na pasta temporária: queda no meio não deixa modelo pela metade
             tmp = Path(tmp)
-            print("Baixando o modelo de tradução (~860 MB, só na 1a vez)...", flush=True)
-            with urllib.request.urlopen(ZIP_URL, timeout=60) as r, open(tmp / "m.zip", "wb") as f:
-                total, got = int(r.headers.get("Content-Length") or 0), 0
-                while chunk := r.read(1 << 20):
-                    f.write(chunk)
-                    got += len(chunk)
-                    if on_progress:
-                        on_progress(got / total if total else None)
-            with open(tmp / "m.zip", "rb") as f:
-                if hashlib.file_digest(f, "sha256").hexdigest() != ZIP_SHA256:
-                    raise ValueError("checksum do download não confere")
+            print(f"Baixando o modelo de tradução {pair} (só na 1a vez)...", flush=True)
+            download(url, sha, tmp / "m.zip", on_progress)
             if on_progress:
                 on_progress(None)  # convertendo (~1 min)
             zipfile.ZipFile(tmp / "m.zip").extractall(tmp / "src")
@@ -121,7 +119,7 @@ def ensure_model(models_dir: str = "models", on_progress=None) -> str:
             for name in ("source.spm", "target.spm", "README.md", "LICENSE"):
                 if (tmp / "src" / name).exists():
                     shutil.copy(tmp / "src" / name, tmp / "out" / name)
-            (tmp / "out" / "info.json").write_text(json.dumps({"name": "opus-mt-tc-big-en-pt", "url": ZIP_URL, "lang": LANG,
+            (tmp / "out" / "info.json").write_text(json.dumps({"name": f"opus-mt-{pair}", "url": url, "lang": lang,
                                                                "license": "CC-BY-4.0"}), encoding="utf-8")
             shutil.rmtree(d, ignore_errors=True)  # sobra de execução anterior
             shutil.move(str(tmp / "out"), str(d))
@@ -142,10 +140,10 @@ def _split(text: str) -> list[str]:
 
 
 class Translator:
-    def __init__(self, *, model_dir: str = "models/mt-en-pt", device: str = "auto", on_progress=None):
-        d = Path(model_dir)
-        if not (d / "model.bin").exists() and d.name == "mt-en-pt":
-            ensure_model(str(d.parent), on_progress)  # 1ª execução sem o setup.ps1: baixa agora (idempotente)
+    def __init__(self, *, pair: str = "en-pt", model_dir: str | None = None, device: str = "auto", on_progress=None):
+        """pair: "en-pt" | "pt-en". model_dir=None = models/mt-<par>, baixado agora se faltar (1ª execução sem o setup.ps1)."""
+        self.pair, self._lang, self._en_pt = pair, PAIRS[pair][2], pair == "en-pt"
+        d = Path(model_dir or ensure_model("models", pair, on_progress))
         if not (d / "model.bin").exists():
             raise FileNotFoundError(f"Modelo de tradução ausente em {d}; rode app.mt.ensure_model()")
         setup_cuda_dlls()
@@ -169,7 +167,7 @@ class Translator:
     def _tokens(self, s: str) -> list[str]:
         """Frase -> tokens do Marian com o token de idioma; [] se não sobrar nada traduzível."""
         sp = self._sp_in
-        for pat, rep in _PRE:
+        for pat, rep in _PRE if self._en_pt else ():
             s = pat.sub(rep, s)
         ids = sp.encode(s)
         if sp.unk_id() in ids:
@@ -177,14 +175,14 @@ class Translator:
             s = "".join(c for c in unicodedata.normalize("NFKD", s)
                         if not unicodedata.combining(c) and sp.unk_id() not in sp.encode(c))
             ids = sp.encode(s)
-        return [LANG, *map(sp.id_to_piece, ids), "</s>"] if ids else []
+        return [*([self._lang] if self._lang else []), *map(sp.id_to_piece, ids), "</s>"] if ids else []
 
     def _decode(self, src: list[str], hyp: list[str]) -> str:
         """Tokens do alvo -> texto. O vocabulário de saída do OPUS não tem À Â Ê Í Ó Ô Ú maiúsculos: eles viram <unk>
         ("Ótimo" -> "timo", "Às vezes" -> "s vezes"). Põe a letra que o próprio modelo acha mais provável (score_batch);
         só custa algo quando aparece <unk> (~15 ms)."""
-        if "<unk>" not in hyp:
-            return self._sp_out.decode(hyp)
+        if "<unk>" not in hyp or not self._en_pt:  # pt-en: o inglês não tem acento; o <unk> só some
+            return self._sp_out.decode([p for p in hyp if p != "<unk>"])
         text = "".join(_UNK if p == "<unk>" else p for p in hyp).replace("▁", " ")
         while _UNK in text:
             i = text.index(_UNK)
@@ -198,7 +196,7 @@ class Translator:
         return text
 
     def translate(self, text: str) -> str:
-        """EN -> PT-BR. Aceita parcial (sem pontuação final, cortado, minúsculo); várias frases vão em lote."""
+        """Traduz no sentido do par. Aceita parcial (sem pontuação final, cortado, minúsculo); várias frases vão em lote."""
         text = " ".join(text.split())
         if not re.search(r"\w", text):
             return text  # vazio ou só pontuação
@@ -208,9 +206,11 @@ class Translator:
         res = self._tr.translate_batch(src, beam_size=1, max_decoding_length=2 * max(map(len, src)) + 10)
         # o OPUS foi treinado com legendas: tira o travessão de diálogo que ele põe no começo de frases curtas
         out = " ".join(re.sub(r"^[-–—]\s*(?=[^\d\s])", "", self._decode(s, r.hypotheses[0])) for s, r in zip(src, res))
-        for cond, pat, rep in _POST:
+        for cond, pat, rep in _POST if self._en_pt else ():
             if cond is None or cond.search(text):
                 out = pat.sub(rep, out)
+        if not self._en_pt:
+            out = re.sub(r"[♪♫]", " ", out)  # o por-eng (treinado com legendas) às vezes cerca a frase com "♪ … ♪"
         out = " ".join(out.split())
         if not _END.search(text):
             out = re.sub(r"[.…]+$", "", out)  # parcial/sem pontuação final: não inventa ponto final nem reticências
@@ -220,7 +220,7 @@ class Translator:
 if __name__ == "__main__":  # check executável: python -m app.mt
     import time
     t = time.perf_counter()
-    tr = Translator(model_dir=ensure_model())
+    tr = Translator()
     tr.warmup()
     print(f"[{tr.device}] pronto em {time.perf_counter() - t:.1f} s")
     assert tr.translate("") == "" and tr.translate("  ...  ") == "..."
@@ -236,4 +236,9 @@ if __name__ == "__main__":  # check executável: python -m app.mt
     t = time.perf_counter()
     tr.translate("So yesterday I was playing with my friends and the server crashed, we lost all our progress, and honestly I'm so done with this game.")
     print(f"25 palavras: {(time.perf_counter() - t) * 1000:.0f} ms")
+    pe = Translator(pair="pt-en")
+    en = pe.translate("Oi gente, vocês tão me ouvindo? Eu tô no ônibus e o meu celular morreu.")
+    print(en)
+    assert en.count("?") == 1 and "bus" in en.lower() and "♪" not in en and ">>" not in en
+    assert not pe.translate("então o que eu tava pensando é que a gente podia").endswith(".")
     print("ok")
