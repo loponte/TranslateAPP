@@ -5,5 +5,7 @@ __pycache__/
 *.pyc
 *.lnk
 settings.json
+speakers.json
+selftest.txt
 build/
 dist/

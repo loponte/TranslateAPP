@@ -38,7 +38,7 @@ try {
     $lnk.Save()
     Write-Host "  ok: TranslateAPP.lnk"
 
-    Passo "Modelos (Whisper, locutores, VAD, tradução)"
+    Passo "Modelos (fala, locutores, VAD, tradução)"
     $env:PYTHONPATH = $PSScriptRoot
     # se um download falhar, só avisa (o app tenta de novo ao abrir). Texto sem acento: o console lê o python em outra codificação
     @'
@@ -46,22 +46,24 @@ import importlib
 falhou = 0
 
 
-def passo(nome, fn):
+def passo(nome, fn, opcional=False):
     global falhou
     try:
         fn()
         print("  ok: " + nome)
     except Exception as e:
-        falhou += 1
+        falhou += not opcional
         print("  AVISO: %s nao foi baixado: %s: %s" % (nome, type(e).__name__, e))
 
 
 asr, diar, mt = (importlib.import_module("app." + m) for m in ("asr", "diar", "mt"))
-passo("Whisper distil-large-v3.5 (GPU)", lambda: asr.ensure_model("models", "distil-large-v3.5"))
-passo("Whisper small.en (reserva, CPU)", lambda: asr.ensure_model("models", "small.en"))
-passo("locutores (TitaNet-small + segmentacao)", diar.ensure_model)
+passo("Whisper large-v3-turbo (GPU, ~1,6 GB)", lambda: asr.ensure_model("models", "large-v3-turbo"))
+passo("Parakeet v3 int8 (CPU, ~490 MB)", lambda: asr.ensure_model("models", "parakeet-v3"))
+passo("locutores (embedding de voz + segmentacao)", diar.ensure_model)
 passo("VAD (Silero)", lambda: importlib.import_module("app.segmenter").Segmenter())  # copia o modelo do faster-whisper
 passo("traducao EN->PT-BR (OPUS-MT, ~860 MB)", mt.ensure_model)
+# opcional: so a legenda em ingles usa; sem ele o app baixa na 1a vez que precisar
+passo("traducao PT->EN (OPUS-MT, ~280 MB)", lambda: mt.ensure_model("models", "pt-en"), opcional=True)
 raise SystemExit(1 if falhou else 0)
 '@ | & $py -
     if ($LASTEXITCODE -ne 0) {
