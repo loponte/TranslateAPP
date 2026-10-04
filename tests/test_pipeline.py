@@ -35,23 +35,28 @@ class Seg:
 
 
 class Asr:
-    """ASR falso: dorme `partial_s`/`final_s`; texto = fn(uid, final) ou "u<uid>p|F". O uid vem do áudio."""
-    def __init__(self, partial_s=0.0, final_s=0.0, fn=None):
-        self.partial_s, self.final_s, self.fn, self.calls = partial_s, final_s, fn, []
+    """ASR falso: dorme `partial_s`/`final_s`; texto = fn(uid, final) ou "u<uid>p|F". O uid vem do áudio. Idioma: o
+    fixado, senão `lid(audio)` (padrão: o prior). langs = (language, prior) de cada chamada."""
+    def __init__(self, partial_s=0.0, final_s=0.0, fn=None, lid=None):
+        self.partial_s, self.final_s, self.fn, self.lid, self.calls, self.langs = partial_s, final_s, fn, lid, [], []
 
-    def transcribe(self, audio, final=False):
+    def _lang(self, audio, language, prior):
+        self.langs.append((language, prior))
+        return language or (self.lid(audio) if self.lid else prior)
+
+    def transcribe(self, audio, final=False, language=None, prior="en"):
         uid = int(audio[0]) - 1
         self.calls.append((uid, final))
         time.sleep(self.final_s if final else self.partial_s)
-        return self.fn(uid, final) if self.fn else f"u{uid}{'F' if final else 'p'}"
+        return (self.fn(uid, final) if self.fn else f"u{uid}{'F' if final else 'p'}"), self._lang(audio, language, prior)
 
 
 class AsrAudio(Asr):
     """ASR falso que decide pelo áudio: texto = fn(audio, final) (pode levantar exceção). calls = (nº de amostras, final)."""
-    def transcribe(self, audio, final=False):
+    def transcribe(self, audio, final=False, language=None, prior="en"):
         self.calls.append((len(audio), final))
         time.sleep(self.final_s if final else self.partial_s)
-        return self.fn(audio, final)
+        return self.fn(audio, final), self._lang(audio, language, prior)
 
 
 class Spk:
@@ -78,6 +83,9 @@ class Spk:
     def reset(self):
         pass
 
+    def save(self):
+        self.saved = getattr(self, "saved", 0) + 1
+
 
 class Mt:
     def __init__(self, fail_text=None):
@@ -91,8 +99,8 @@ class Mt:
 
 
 class Cap:
-    def __init__(self, on_audio, name="Stub", on_status=None):
-        self.on_audio, self.device_name, self.on_status, self.stopped = on_audio, name, on_status, False
+    def __init__(self, on_audio, name="Stub", on_status=None, app=None):
+        self.on_audio, self.device_name, self.on_status, self.app, self.stopped = on_audio, name, on_status, app, False
 
     def start(self):
         pass
@@ -134,8 +142,8 @@ def words(audio, final):
 def make(script, asr, spk=None, mt=None, name="Stub", pad=0.0):
     out, caps = queue.Queue(), []
 
-    def factory(on_audio, device=None, on_status=None):
-        caps.append(Cap(on_audio, name, on_status))
+    def factory(on_audio, device=None, on_status=None, app=None):
+        caps.append(Cap(on_audio, app or name, on_status, app))
         return caps[-1]
 
     p = Pipeline(out, segmenter=Seg(script), transcriber=asr, tracker=spk or Spk(), translator=mt or Mt(),
@@ -147,11 +155,11 @@ READY = [Status("Carregando modelos…"), Status("Pronto — escutando Stub", "r
 
 
 @contextlib.contextmanager
-def running(script, asr, spk=None, mt=None, pad=0.0):
+def running(script, asr, spk=None, mt=None, pad=0.0, **start):
     p, caps, out = make(script, asr, spk, mt, pad=pad)
-    p.start()
+    p.start(**start)
     got = [out.get(timeout=3), out.get(timeout=3)]
-    assert got == READY, got
+    assert got == READY or start.get("app"), got
     try:
         yield p, caps[0], out
     finally:
@@ -223,7 +231,7 @@ def test_burst_all_finals_in_order():
         ups = [u for u in items if isinstance(u, Update)]
         finals = [u for u in ups if u.final]
         assert [u.utt_id for u in finals] == list(range(20)), "finais fora de ordem ou faltando"
-        assert all(u.en == f"u{u.utt_id}F" and u.pt == f"PT u{u.utt_id}F" and u.speaker == (u.utt_id + 1) % 3
+        assert all(u.orig == f"u{u.utt_id}F" and u.sub == f"PT u{u.utt_id}F" and u.speaker == (u.utt_id + 1) % 3
                    for u in finals)
         done = set()
         for u in ups:                          # nada da utterance depois do seu final
@@ -272,8 +280,8 @@ def test_empty_final_discards_line():
         feed(cap)
         fin = out.get(timeout=2)
         lines = csv_rows(p, 1)
-    assert (part.final, part.en) == (False, "hello")
-    assert (fin.utt_id, fin.final, fin.en, fin.pt, fin.speaker) == (0, True, "", "", None)
+    assert (part.final, part.orig) == (False, "hello")
+    assert (fin.utt_id, fin.final, fin.orig, fin.sub, fin.speaker) == (0, True, "", "", None)
     assert mt.calls == ["hello"], "final vazio não deve traduzir"
     assert len(lines) == 2
 
@@ -286,7 +294,7 @@ def test_empty_final_without_partial_text_skips_speakers():
         fin = out.get(timeout=2)
         time.sleep(0.1)
         assert out.empty()
-    assert (fin.utt_id, fin.final, fin.en, fin.pt, fin.speaker) == (0, True, "", "", None)
+    assert (fin.utt_id, fin.final, fin.orig, fin.sub, fin.speaker) == (0, True, "", "", None)
     assert not spk.calls and not spk.seg_calls and not mt.calls, "final vazio não deve criar locutor nem traduzir"
 
 
@@ -301,7 +309,7 @@ def test_label_cache_and_mt_skip():
             ups.append(out.get(timeout=2))
     assert [u.speaker for u in ups] == [None, 1, 1, 1], [u.speaker for u in ups]
     assert spk.calls == [False, True], spk.calls
-    assert mt.calls == ["hello"] and ups[-1].pt == "PT hello", "EN igual ao parcial: MT deve ser pulada"
+    assert mt.calls == ["hello"] and ups[-1].sub == "PT hello", "EN igual ao parcial: MT deve ser pulada"
 
 
 def test_unknown_voice_backs_off():
@@ -328,11 +336,11 @@ def test_errors_do_not_kill_pipeline():
         feed(cap, 5)                                   # finais 0..4 em rajada
         items = errs + collect(out, lambda it: n_finals(it) == 5)
         ups = {u.utt_id: u for u in items if isinstance(u, Update) and u.final}
-        assert (ups[0].en, ups[0].pt) == ("u0F", "PT u0F")
-        assert (ups[1].en, ups[1].pt, ups[1].speaker) == ("", "", None), "ASR falhou no final sem parcial: descarta a linha"
-        assert (ups[2].en, ups[2].pt) == ("u2F", ""), "MT falhou: mantém o EN"
-        assert (ups[3].en, ups[3].speaker) == ("u3F", None), "locutor falhou: mantém a legenda"
-        assert (ups[4].en, ups[4].pt) == ("u4F", "PT u4F"), "pipeline vivo depois dos erros"
+        assert (ups[0].orig, ups[0].sub) == ("u0F", "PT u0F")
+        assert (ups[1].orig, ups[1].sub, ups[1].speaker) == ("", "", None), "ASR falhou no final sem parcial: descarta a linha"
+        assert (ups[2].orig, ups[2].sub) == ("u2F", ""), "MT falhou: mantém o EN"
+        assert (ups[3].orig, ups[3].speaker) == ("u3F", None), "locutor falhou: mantém a legenda"
+        assert (ups[4].orig, ups[4].sub) == ("u4F", "PT u4F"), "pipeline vivo depois dos erros"
         texts = [x.text for x in items if isinstance(x, Status) and x.level == "error"]
         assert sum("ASR" in t and "boom-asr" in t for t in texts) == 1, texts   # 2 falhas de ASR, 1 aviso (anti-inundação)
         assert any("tradução" in t for t in texts) and any("locutor" in t for t in texts), texts
@@ -348,9 +356,9 @@ def test_split_final_two_speakers():
         feed(cap)
         a, b = out.get(timeout=2), out.get(timeout=2)
         lines = csv_rows(p, 1)
-    assert (part.utt_id, part.final, part.en) == (0, False, "u0 A")
-    assert (a.utt_id, a.final, a.speaker, a.en, a.pt) == (0, True, 0, "u0 A", "PT u0 A"), "1ª linha troca o parcial"
-    assert (b.utt_id, b.final, b.speaker, b.en, b.pt) == (EXTRA_ID, True, 2, "u0 B", "PT u0 B")
+    assert (part.utt_id, part.final, part.orig) == (0, False, "u0 A")
+    assert (a.utt_id, a.final, a.speaker, a.orig, a.sub) == (0, True, 0, "u0 A", "PT u0 A"), "1ª linha troca o parcial"
+    assert (b.utt_id, b.final, b.speaker, b.orig, b.sub) == (EXTRA_ID, True, 2, "u0 B", "PT u0 B")
     cut = fin.t_end - len(fin.audio) / SR + 1.5  # t0/t_end de cada trecho: início do áudio + a / + b
     assert abs(a.t0 - fin.t0) < 1e-6 and abs(a.t_end - cut) < 1e-6 and abs(b.t0 - cut) < 1e-6 and abs(b.t_end - fin.t_end) < 1e-6
     assert a.t_ready <= b.t_ready
@@ -371,7 +379,7 @@ def test_single_piece_final_is_the_old_flow():
         time.sleep(0.1)
         assert out.empty(), "1 trecho = 1 linha"
     assert (part.speaker, part.final) == (1, False)
-    assert (fin.utt_id, fin.speaker, fin.en, fin.pt, fin.final) == (0, 2, "hello", "PT hello", True)
+    assert (fin.utt_id, fin.speaker, fin.orig, fin.sub, fin.final) == (0, 2, "hello", "PT hello", True)
     assert spk.calls == [False] and len(spk.seg_calls) == 1 and mt.calls == ["hello"]
     assert asr.calls == [(0, False), (0, True)]
 
@@ -389,7 +397,7 @@ def test_split_skips_empty_parts_and_keeps_unknown_speaker():
             time.sleep(0.1)
             assert out.empty()
         want = [(0, 0, "u0 A"), (EXTRA_ID, 2, "u0 C")] if empty == 1 else [(0, None, "u0 B"), (EXTRA_ID, 2, "u0 C")]
-        assert [(u.utt_id, u.speaker, u.en) for u in (a, b)] == want, (empty, a, b)
+        assert [(u.utt_id, u.speaker, u.orig) for u in (a, b)] == want, (empty, a, b)
 
 
 def test_split_all_parts_empty_discards():
@@ -398,12 +406,12 @@ def test_split_all_parts_empty_discards():
     split = {0: [(0.0, 1.5, 0), (1.5, 4.0, 1)]}
     with running([[ev("partial", 0, 1.5)], [split_ev(0)]], asr, Spk(split=split)) as (p, cap, out):
         feed(cap)
-        assert out.get(timeout=2).en == "x"
+        assert out.get(timeout=2).orig == "x"
         feed(cap)
         d = out.get(timeout=2)
         time.sleep(0.1)
         assert out.empty()
-    assert (d.utt_id, d.speaker, d.en, d.pt, d.final) == (0, None, "", "", True)
+    assert (d.utt_id, d.speaker, d.orig, d.sub, d.final) == (0, None, "", "", True)
     assert [n / SR for n, final in asr.calls if final] == [1.5, 2.5, 4.0], asr.calls
 
 
@@ -422,7 +430,7 @@ def test_split_falls_back_to_whole_line():
                 time.sleep(0.1)
                 assert out.empty(), name
             ups = [u for u in items if isinstance(u, Update) and u.final]
-            assert [(u.utt_id, u.speaker, u.en, u.pt) for u in ups] == [(0, 1, "u0 todo", "PT u0 todo")], (name, partial, ups)
+            assert [(u.utt_id, u.speaker, u.orig, u.sub) for u in ups] == [(0, 1, "u0 todo", "PT u0 todo")], (name, partial, ups)
             assert sum(n == 4 * SR and final for n, final in asr.calls) == 1, asr.calls
             errs = [x.text for x in items if isinstance(x, Status) and x.level == "error"]
             assert bool(errs) == (name == "ASR falhou") and all("boom-asr" in t for t in errs), (name, errs)
@@ -434,7 +442,7 @@ def test_segments_failure_falls_back_to_identify():
         feed(cap, 2)
         items = collect(out, lambda it: n_finals(it) == 2)
     ups = [u for u in items if isinstance(u, Update)]
-    assert [(u.utt_id, u.speaker, u.en) for u in ups] == [(0, 1, "u0F"), (1, 2, "u1F")], ups  # identify(final=True)
+    assert [(u.utt_id, u.speaker, u.orig) for u in ups] == [(0, 1, "u0F"), (1, 2, "u1F")], ups  # identify(final=True)
     assert spk.calls == [True, True]
     errs = [x.text for x in items if isinstance(x, Status) and x.level == "error"]
     assert len(errs) == 1 and "locutor" in errs[0] and "boom-seg" in errs[0], errs          # 1 aviso só (anti-inundação)
@@ -472,10 +480,10 @@ def test_stop_with_job_in_flight():
     started, release = threading.Event(), threading.Event()
 
     class Hang(Asr):
-        def transcribe(self, audio, final=False):
+        def transcribe(self, audio, final=False, language=None, prior="en"):
             started.set()
             release.wait(10)
-            return "tarde"
+            return "tarde", "en"
 
     with running([[ev("final", 0, 2.0)]], Hang()) as (p, cap, out):
         feed(cap)
@@ -489,6 +497,112 @@ def test_stop_with_job_in_flight():
         time.sleep(0.3)
         assert out.empty(), "saída depois do stop"
         assert not [t for t in threading.enumerate() if t.name.startswith("pipe-") and t.is_alive()], "thread viva"
+
+
+def test_same_language_skips_mt():
+    # fala no idioma da legenda: sub = orig, sem MT; no outro idioma traduz (o Mt falso serve aos dois pares)
+    lid = lambda a: "pt" if int(a[0]) % 2 else "en"                   # uid par fala PT (1ª amostra = uid + 1)
+    script = [[ev("partial", 0, 2.0)], [ev("final", 0, 2.0)], [ev("partial", 1, 2.0)], [ev("final", 1, 2.0)]]
+    mt = Mt()
+    with running(script, Asr(lid=lid), mt=mt, sub_lang="pt") as (p, cap, out):
+        ups = []
+        for _ in script:
+            feed(cap)
+            ups.append(out.get(timeout=2))
+    assert [(u.utt_id, u.final, u.lang, u.sub) for u in ups] == [
+        (0, False, "pt", "u0p"), (0, True, "pt", "u0F"), (1, False, "en", "PT u1p"), (1, True, "en", "PT u1F")], ups
+    assert mt.calls == ["u1p", "u1F"], mt.calls
+    with running([[ev("final", 0, 2.0)]], Asr(lid=lambda a: "en"), mt=(mt := Mt()), sub_lang="en") as (p, cap, out):
+        feed(cap)
+        u = out.get(timeout=2)
+    assert (u.orig, u.sub, u.lang) == ("u0F", "u0F", "en") and not mt.calls
+
+
+def test_language_lock_and_prior():
+    # call "auto": parcial curto usa o prior da sessão (o outro idioma da legenda); o 1º parcial >= LOCK_S trava o idioma
+    # e o resto da utterance (parciais e final) passa language fixo; a utterance seguinte herda o idioma do locutor
+    from app.pipeline import LOCK_S
+    script = [[ev("partial", 0, 1.0)], [ev("partial", 0, LOCK_S)], [ev("partial", 0, 2.0)], [ev("final", 0, 2.5)],
+              [ev("partial", 1, 1.0)]]
+    asr = Asr(lid=lambda a: "pt" if len(a) >= LOCK_S * SR else "en")
+    with running(script, asr, sub_lang="pt") as (p, cap, out):
+        for _ in script:
+            feed(cap)
+            out.get(timeout=2)
+    assert asr.langs == [(None, "en"), (None, "en"), ("pt", "pt"), ("pt", "pt"), (None, "pt")], asr.langs
+    asr = Asr(lid=lambda a: "pt")                                     # call fixa: nunca detecta
+    with running(script[:2], asr, call_lang="en") as (p, cap, out):
+        for _ in range(2):
+            feed(cap)
+            assert out.get(timeout=2).lang == "en"
+    assert all(lang == "en" for lang, _ in asr.langs), asr.langs
+
+
+def test_speaker_commands_serialized():
+    # speaker() espera o job de inferência em andamento (o tracker não é thread-safe); sem tracker, forget vai direto ao arquivo
+    started, release, order = threading.Event(), threading.Event(), []
+
+    class Hang(Asr):
+        def transcribe(self, audio, final=False, language=None, prior="en"):
+            started.set()
+            release.wait(5)
+            order.append("job")
+            return "x", "en"
+
+    class Pins(Spk):
+        def pin(self, spk):
+            order.append(("pin", spk))
+
+        def merge(self, src, dst):
+            order.append(("merge", src, dst))
+
+        def forget(self, spk=None):
+            order.append(("forget", spk))
+
+    spk = Pins()
+    with running([[ev("final", 0, 2.0)]], Hang(), spk) as (p, cap, out):
+        feed(cap)
+        assert started.wait(2)
+        t = threading.Thread(target=lambda: [p.speaker("pin", 3), p.speaker("merge", 1, 0), p.speaker("forget_all")])
+        t.start()
+        time.sleep(0.2)
+        assert order == [], "speaker() rodou no meio do job"
+        release.set()
+        t.join(2)
+        assert order == ["job", ("pin", 3), ("merge", 1, 0), ("forget", None)], order
+    end = time.monotonic() + 2                                        # o worker grava ao sair (sem atrasar o stop())
+    while not getattr(spk, "saved", 0) and time.monotonic() < end:
+        time.sleep(0.01)
+    assert getattr(spk, "saved", 0) == 1, "fim de sessão grava as vozes fixadas"
+    prev, fake, got = sys.modules.get("app.diar"), types.ModuleType("app.diar"), []
+    fake.forget_saved = lambda path, spk=None: got.append((Path(path).name, spk))
+    fake.saved_speakers = lambda path: [4, 9]
+    sys.modules["app.diar"] = fake
+    try:
+        p = Pipeline(queue.Queue())                                   # nada carregado: tracker None
+        p.speaker("forget", 4)
+        p.speaker("forget_all")
+        p.speaker("pin", 1)                                           # sem tracker: ignorado
+        assert got == [("speakers.json", 4), ("speakers.json", None)] and p.saved_speakers() == [4, 9], got
+    finally:
+        sys.modules.pop("app.diar", None)
+        if prev is not None:
+            sys.modules["app.diar"] = prev
+
+
+def test_app_capture_and_args():
+    with running([], Asr(), app="Discord.exe") as (p, cap, out):
+        assert cap.app == "Discord.exe"
+    p, caps, out = make([], Asr())
+    try:
+        for bad in ({"call_lang": "es"}, {"sub_lang": "auto"}):
+            try:
+                p.start(**bad)
+            except AssertionError:
+                continue
+            raise AssertionError(f"aceitou {bad}")
+    finally:
+        p.stop()
 
 
 def test_restart():
@@ -553,7 +667,7 @@ def test_load_failure_and_stop_during_load():
         p.start()
         items = collect(out, lambda it: len(it) == 2)
         assert items[0] == Status("Carregando modelos…") and items[1].level == "error", items
-        assert "Whisper" in items[1].text and "modelo X" in items[1].text and "setup.ps1" in items[1].text
+        assert "fala" in items[1].text and "modelo X" in items[1].text and "setup.ps1" in items[1].text
         assert not caps, "não abre captura se a carga falhou"
 
         class Slow:

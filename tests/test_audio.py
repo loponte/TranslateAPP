@@ -4,6 +4,10 @@
     set TRANSLATEAPP_AUDIO_MANUAL=1 && pytest tests\\test_audio.py  (sem a variável o pytest pula estes testes)
     set TRANSLATEAPP_AUDIO_DEVICE=LG                              (opcional) captura/zeros num dispositivo ocioso
 
+Captura por app (Windows build 19041+): dois processos tocam tons diferentes (440 e 1000 Hz) por cópias renomeadas do
+python.exe do venv (tone_a.exe/tone_b.exe; o som sai do python.exe filho, então também testa a árvore de processos) e
+cada um é capturado pelo nome do exe. Mede isolamento, ritmo dos blocos, app fechando/reabrindo e app ausente.
+
 Sem som tocando, o loopback de alguns dispositivos não entrega nada (a linha do tempo é preenchida com zeros pelo
 relógio); outros entregam o que estiver tocando no PC, então a checagem de "tudo zero" só vale para um dispositivo
 ocioso escolhido por TRANSLATEAPP_AUDIO_DEVICE.
@@ -11,6 +15,7 @@ ocioso escolhido por TRANSLATEAPP_AUDIO_DEVICE.
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 import tempfile
 import threading
@@ -27,7 +32,7 @@ if sys.platform == "win32":
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import app.audio as audio  # noqa: E402
-from app.audio import LoopbackCapture, list_loopback_devices  # noqa: E402
+from app.audio import APP_CAPTURE, LoopbackCapture, list_audio_apps, list_loopback_devices  # noqa: E402
 from app.events import SR  # noqa: E402
 from app.segmenter import Segmenter  # noqa: E402
 
@@ -170,9 +175,139 @@ def test_troca_da_saida_padrao_reabre():
     assert np.all(np.diff(ts) > 0) and np.diff(ts).max() < 0.5              # reabriu sozinho, sem buraco longo na linha do tempo
 
 
+# ---- captura por app ----
+def _tone_player(exe_name: str, freq: int, secs: float = 12.0) -> subprocess.Popen:
+    """Toca um tom de `freq` Hz (amplitude 0,2; 48 kHz estéreo) por uma cópia renomeada do launcher do venv."""
+    assert sys.prefix != sys.base_prefix, "rode com o python do .venv (o launcher renomeado precisa do pyvenv.cfg)"
+    d = Path(tempfile.gettempdir()) / "translateapp_fv"
+    (d / "Scripts").mkdir(parents=True, exist_ok=True)
+    shutil.copy(Path(sys.prefix) / "pyvenv.cfg", d)
+    exe, wav = d / "Scripts" / exe_name, d / f"tone{freq}.wav"
+    if not exe.exists():
+        shutil.copy(sys.executable, exe)
+    y = (0.2 * np.sin(2 * np.pi * freq * np.arange(int(48000 * secs)) / 48000) * 32767).astype("<i2")
+    with wave.open(str(wav), "wb") as w:
+        w.setnchannels(2), w.setsampwidth(2), w.setframerate(48000)
+        w.writeframes(np.repeat(y[:, None], 2, 1).tobytes())
+    return subprocess.Popen([str(exe), "-c", f"import winsound; winsound.PlaySound(r'{wav}', winsound.SND_FILENAME)"])
+
+
+def _kill(p: subprocess.Popen) -> None:
+    subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)], capture_output=True)
+
+
+def _band(x: np.ndarray, f0: float) -> float:
+    """Fração da energia em f0 ± 20 Hz."""
+    S = np.abs(np.fft.rfft(x.astype(np.float64))) ** 2
+    f = np.fft.rfftfreq(len(x), 1 / SR)
+    return float(S[(f > f0 - 20) & (f < f0 + 20)].sum() / max(S.sum(), 1e-20))
+
+
+class _Rec:
+    """LoopbackCapture(app=...) que guarda chunks, t_end e (instante, status)."""
+    def __init__(self, app: str):
+        self.chunks, self.ends, self.status = [], [], []
+        self.cap = LoopbackCapture(lambda c, t: (self.chunks.append(c), self.ends.append(t)), app=app,
+                                   on_status=lambda m: self.status.append((time.monotonic(), m)))
+
+    def msgs(self) -> list[str]:
+        return [m for _, m in self.status]
+
+
+@manual
+def test_lista_apps():
+    if not APP_CAPTURE:
+        return print("  captura por app indisponível neste Windows")
+    pa = _tone_player("tone_a.exe", 440)
+    try:
+        time.sleep(1.0)
+        ms = []
+        for _ in range(10):
+            t = time.perf_counter()
+            apps = list_audio_apps()
+            ms.append((time.perf_counter() - t) * 1e3)
+    finally:
+        _kill(pa)
+    print(f"  {apps} | {np.median(ms):.1f} ms (mín {min(ms):.1f}, máx {max(ms):.1f})")
+    # o som sai do python.exe filho do tone_a.exe (outro exe): a sessão aparece como python.exe
+    assert any(a.id.lower() == "python.exe" and a.active for a in apps) and apps[0].active, apps
+    assert np.median(ms) <= 30, ms
+
+
+@manual
+def test_app_isolamento_e_ritmo():
+    if not APP_CAPTURE:
+        return
+    pa, pb = _tone_player("tone_a.exe", 440), _tone_player("tone_b.exe", 1000)
+    ra, rb = _Rec("tone_a.exe"), _Rec("TONE_B.EXE")   # o nome do exe não diferencia maiúsculas
+    try:
+        time.sleep(0.5)
+        ra.cap.start(), rb.cap.start()
+        time.sleep(6.0)
+        ra.cap.stop(), rb.cap.stop()
+    finally:
+        _kill(pa), _kill(pb)
+    for r, f, g in ((ra, 440, 1000), (rb, 1000, 440)):
+        x = np.concatenate(r.chunks)
+        x = x[np.argmax(np.abs(x) > 0.01):][SR // 2:]   # do início do tom (+0,5 s) em diante
+        sp = np.diff(r.ends) * 1e3
+        rms = float(np.sqrt(np.mean(x.astype(np.float64) ** 2)))
+        print(f"  {r.cap.app}: {_band(x, f) * 100:.2f} % em {f} Hz, {_band(x, g) * 100:.4f} % em {g} Hz (o outro), rms {rms:.4f}"
+              f" | {len(r.chunks)} blocos de {sorted({len(c) for c in r.chunks})}, passo mediano {np.median(sp):.2f} ms"
+              f" (mín {sp.min():.1f}, máx {sp.max():.1f}) | {r.msgs()}")
+        assert _band(x, f) >= 0.99 and _band(x, g) < 0.001 and 0.12 < rms < 0.16, (_band(x, f), _band(x, g), rms)
+        assert {len(c) for c in r.chunks} == {512} and 31.7 <= np.median(sp) <= 33.3 and np.all(sp > 0), np.median(sp)
+        assert r.msgs() == [f"Capturando áudio de: {r.cap.app[:-4]}"], r.status   # o launcher não tem FileDescription
+
+
+@manual
+def test_app_fecha_e_reabre():
+    if not APP_CAPTURE:
+        return
+    r = _Rec("tone_a.exe")
+    pa = _tone_player("tone_a.exe", 440)
+    try:
+        time.sleep(0.5)
+        r.cap.start()
+        time.sleep(2.0)
+        _kill(pa)
+        t_kill = time.monotonic()
+        time.sleep(3.0)
+        pa = _tone_player("tone_a.exe", 440)
+        t_back = time.monotonic()
+        time.sleep(3.5)
+        r.cap.stop()
+    finally:
+        _kill(pa)
+    ends = np.repeat(np.array(r.ends), 512)   # t_end de cada amostra (aprox.: o do seu chunk)
+    x = np.concatenate(r.chunks)
+    gone, back = x[(ends > t_kill + 0.8) & (ends < t_back)], x[ends > t_back + 1.5]
+    reopen = next(t for t, m in r.status if t > t_back and m.startswith("Capturando")) - t_back
+    sp = np.diff(r.ends)
+    print(f"  {r.msgs()} | fechado: pico {np.abs(gone).max():.4f} | reabriu {reopen:.2f} s depois: {_band(back, 440) * 100:.1f} %"
+          f" em 440 Hz | passo máx {sp.max() * 1e3:.1f} ms")
+    assert r.msgs() == ["Capturando áudio de: tone_a", "tone_a não está aberto — esperando…", "Capturando áudio de: tone_a"], r.msgs()
+    assert np.abs(gone).max() == 0 and _band(back, 440) >= 0.99 and reopen < 2.0
+    assert np.all(sp > 0) and sp.max() < 0.1   # a linha do tempo não para
+
+
+@manual
+def test_app_ausente_avisa_e_zera():
+    if not APP_CAPTURE:
+        return
+    r = _Rec("__nao_existe__.exe")
+    r.cap.start()
+    time.sleep(3.5)
+    r.cap.stop()
+    assert r.msgs() == ["__nao_existe__ não está aberto — esperando…"], r.msgs()   # avisa uma vez, não repete
+    assert len(r.chunks) > 90 and max(np.abs(c).max() for c in r.chunks) == 0 and r.cap.device_name == ""
+    assert not [t for t in threading.enumerate() if t.name.startswith("audio-")]
+
+
 if __name__ == "__main__":
     for f in (test_list_devices, test_5s_sem_tocar_nada, test_toca_8s_e_segmenta, test_dispositivo_inexistente_avisa_e_para,
-              test_troca_da_saida_padrao_reabre):
+              test_troca_da_saida_padrao_reabre, test_lista_apps, test_app_isolamento_e_ritmo, test_app_fecha_e_reabre,
+              test_app_ausente_avisa_e_zera):
         print(f.__name__)
         f()
         print("  ok")

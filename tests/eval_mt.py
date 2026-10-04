@@ -1,10 +1,11 @@
-"""Avaliação da tradução EN->PT-BR: chrF (corpus, igual ao sacreBLEU padrão) + latência.
+"""Avaliação da tradução EN->PT-BR (e PT->EN com --dir pten): chrF (corpus, igual ao sacreBLEU padrão) + latência.
 
 Uso, da raiz do projeto (PowerShell):  $env:PYTHONPATH=(Get-Location).Path
   .venv\\Scripts\\python.exe tests\\eval_mt.py                        # app.mt.Translator (models\\mt-en-pt): chrF + latência, GPU e CPU
   .venv\\Scripts\\python.exe tests\\eval_mt.py -v --device cuda       # + imprime cada tradução (EN/REF/HYP)
   .venv\\Scripts\\python.exe tests\\eval_mt.py --terms                # glossário: termos de call/jogo sem e com as regras
   .venv\\Scripts\\python.exe tests\\eval_mt.py --no-glossary          # chrF do modelo cru
+  .venv\\Scripts\\python.exe tests\\eval_mt.py --dir pten             # PT->EN: as 55 frases ao contrário (app.mt, par pt-en)
   .venv\\Scripts\\python.exe tests\\eval_mt.py --cand opus madlad3b --root <pasta> --device cuda --ct bfloat16 --lat
 Candidatos (--cand) = subpastas CT2 de --root, ver CANDS. Só o app/mt.py entra no produto.
 Não precisa de pacote extra (sacreBLEU só serviu para validar o chrF próprio: idêntico até a 4a casa)."""
@@ -177,6 +178,12 @@ LAT = {
     25: "So yesterday I was playing with my friends and the server crashed, we lost all our progress, and honestly I'm so done with this game.",
 }
 
+LAT_PT = {  # PT->EN
+    4: "Vocês tão me ouvindo?",
+    12: "Acho que a gente devia adiar o lançamento pra semana que vem, sinceramente.",
+    25: "Então ontem eu tava jogando com os meus amigos e o servidor caiu, a gente perdeu todo o progresso e sinceramente eu cansei desse jogo.",
+}
+
 # marcadores de português de Portugal (devem ser raros/ausentes na saída)
 PTPT = re.compile(r"\b(est(?:ou|ás|á|amos|ão)\s+a\s+\w+[aei]r|ecrã|ficheiros?|utilizador(?:es)?|equipa|telemóvel|autocarro|rato|miúdos?|"
                   r"pequeno-almoço|comboio|frigorífico|a\s+gente\s+vamos|tu\s+\w+)\b", re.I)
@@ -217,24 +224,25 @@ def median_ms(fn, text: str, n: int = 25, warm: int = 3) -> tuple[float, float]:
     return statistics.median(ts), ts[int(0.9 * (len(ts) - 1))]
 
 
-def report(name: str, fn, device: str, verbose: bool, lat: bool, n: int) -> dict:
+def report(name: str, fn, device: str, verbose: bool, lat: bool, n: int, pten: bool = False) -> dict:
+    srcs = [pt if pten else en for _, en, pt in DATA]  # pten: a referência em português vira a origem
+    refs = [en if pten else pt for _, en, pt in DATA]
     t = time.perf_counter()
-    hyps = [fn(en) for _, en, _ in DATA]
+    hyps = [fn(x) for x in srcs]
     dt = (time.perf_counter() - t) / len(DATA) * 1000
-    refs = [r for _, _, r in DATA]
     out = {"all": chrf(hyps, refs)}
     for tag in dict.fromkeys(c for c, _, _ in DATA):
         idx = [i for i, (c, _, _) in enumerate(DATA) if c == tag]
         out[tag] = chrf([hyps[i] for i in idx], [refs[i] for i in idx])
-    ptpt = sum(bool(PTPT.search(h)) for h in hyps)
+    ptpt = 0 if pten else sum(bool(PTPT.search(h)) for h in hyps)
     print(f"\n### {name} [{device}]  chrF={out['all']:.1f}  " + " ".join(f"{k}={v:.0f}" for k, v in out.items() if k != "all")
           + f"  ptpt={ptpt}  media/frase={dt:.0f} ms")
     if verbose:
-        for (tag, en, ref), h in zip(DATA, hyps):
-            print(f"  [{tag}] EN : {en}\n         REF: {ref}\n         HYP: {h}")
+        for (tag, *_), src, ref, h in zip(DATA, srcs, refs, hyps):
+            print(f"  [{tag}] SRC: {src}\n         REF: {ref}\n         HYP: {h}")
     if lat:
         res = {}
-        for w, text in LAT.items():
+        for w, text in (LAT_PT if pten else LAT).items():
             med, p90 = median_ms(fn, text, n)
             res[w] = med
             print(f"  latência {w:>2} palavras: mediana {med:6.1f} ms  p90 {p90:6.1f} ms   -> {fn(text)}")
@@ -348,6 +356,7 @@ def main() -> None:
     ap.add_argument("--threads", type=int, default=0)
     ap.add_argument("-n", type=int, default=25, help="rodadas de latência (mediana)")
     ap.add_argument("--lat", action="store_true", help="mede latência (4/12/25 palavras)")
+    ap.add_argument("--dir", default="ente", choices=["ente", "pten"], help="ente = EN->PT (padrão); pten = PT->EN (só app.mt)")
     ap.add_argument("-v", action="store_true")
     a = ap.parse_args()
     devs = ["cuda", "cpu"] if a.device == "both" else [a.device]
@@ -360,13 +369,14 @@ def main() -> None:
     import app.mt as mt
     if a.no_glossary:
         mt._PRE, mt._POST = [], []
+    pten = a.dir == "pten"
     for d in devs:
-        tr = mt.Translator(device=d)
+        tr = mt.Translator(pair="pt-en" if pten else "en-pt", device=d)
         tr.warmup()
-        if a.terms:
+        if a.terms and not pten:
             check_terms(tr, a.v)
             continue
-        report("app.mt.Translator", tr.translate, d, a.v, True, a.n)
+        report(f"app.mt.Translator {tr.pair}", tr.translate, d, a.v, True, a.n, pten)
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@ Métricas (antes = 1 rótulo por utterance, identify(final=True); depois = segme
  ms       latência de uma chamada (mediana / p95) neste PC, com outros processos rodando.
 """
 import argparse
+import copy
 import itertools
 import json
 import os
@@ -109,12 +110,16 @@ def score(utts, turns, preds, ms):
     return r
 
 
+STATE = ("_sum", "_w", "_tot", "_lab", "_pin", "_next")  # estado do SpeakerTracker
+
+
 def snap(tr):
-    return [v.copy() for v in tr._sum], list(tr._w)
+    return copy.deepcopy({k: getattr(tr, k) for k in STATE})
 
 
 def restore(tr, st):
-    tr._sum, tr._w = [v.copy() for v in st[0]], list(st[1])
+    for k, v in copy.deepcopy(st).items():
+        setattr(tr, k, v)
 
 
 def evaluate(tr, utts, turns):
@@ -135,8 +140,10 @@ def evaluate(tr, utts, turns):
                 restore(tr, s0)
                 assert tr.identify(au, True) == p[0][2], "sem corte deve dar o rótulo do identify"
                 s2 = snap(tr)
-                same = len(s1[0]) == len(s2[0]) and all(np.allclose(x, y, atol=1e-6) for x, y in zip(s1[0], s2[0]))
-                assert same and np.allclose(s1[1], s2[1], atol=1e-6), "sem corte deve atualizar os centróides como o identify"
+                c1, c2 = s1["_sum"], s2["_sum"]
+                same = len(c1) == len(c2) and all(np.allclose(x, y, atol=1e-6) for x, y in zip(c1, c2))
+                assert same and np.allclose(s1["_w"], s2["_w"], atol=1e-6) and s1["_lab"] == s2["_lab"], \
+                    "sem corte deve atualizar os centróides como o identify"
             preds.append(p)
         res[mode] = score(utts, turns, preds, ms)
     return res

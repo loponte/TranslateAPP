@@ -33,3 +33,12 @@ reprodutível (saída idêntica byte a byte) e só trechos novos precisam de int
 
 Referência: faster-whisper `small.en` (int8) transcrevendo cada turno recortado pelo gabarito dá WER 0,3% (2spk),
 2,2% (4spk; só normalização, "back end" / "Oct. 26") e 0,0% (noisy).
+
+## Fixtures em português (`make_pt.py`)
+Irmãs dos fixtures EN, com o mesmo formato e gabarito (reaproveita `make_fixtures.py`; cache próprio em `_cache_pt/`):
+
+    uv run --no-project --with edge-tts --with numpy python tests\data\make_pt.py
+
+- `conv_pt_2spk.wav` (102,4 s, 21 turnos; Antonio/Francisca), `conv_pt_3spk.wav` (70,6 s, 17 turnos; + Thalita) e
+  `conv_pt_2spk_noisy.wav` (12 dB). Usados por `tests/bench_asr.py` (WER PT e acerto de idioma) e `tests/e2e_report.py`
+  (`conv_pt_2spk --sub-lang en`; `misto` = conv_2spk + 1 s + conv_pt_2spk, montado na memória).

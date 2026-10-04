@@ -9,6 +9,7 @@ Uso (da raiz do projeto, com o .venv):
   python tests/eval_diar.py --harsh            # inclui 2spk/4spk degradados (banda de telefone + ruído branco 8 dB)
   python tests/eval_diar.py --e2e              # idem com o Segmenter real (utterances como o pipeline as vê)
   python tests/eval_diar.py --models a.onnx,b.onnx --sweep --bench   # compara modelos (cada um no seu melhor threshold)
+  python tests/eval_diar.py --set MAX_S=4,SLACK=0.1                  # varre constantes de app/diar.py
 
 Troca de voz DENTRO da utterance (SpeakerTracker.segments): tests/eval_split.py.
 
@@ -25,6 +26,7 @@ import json
 import os
 import random
 import sys
+import tempfile
 import time
 import urllib.request
 import wave
@@ -37,7 +39,8 @@ from app import diar  # noqa: E402
 from app.events import SR  # noqa: E402
 
 DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
-GOALS = {"conv_2spk": 95, "conv_4spk": 85, "conv_2spk_noisy": 90}
+# conv_4spk 80 (era 85): com o locutor provisório as 1as falas curtas (1,1 s) de B/C/D saem "?" de propósito
+GOALS = {"conv_2spk": 95, "conv_4spk": 80, "conv_2spk_noisy": 90}
 CROPS = (1.0, 1.5, 2.0)
 PAD = (0.25, 0.15)  # preroll/tail do Segmenter (s)
 REAL_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/"
@@ -136,7 +139,7 @@ def run(tr, turns):
         g = [(t, p) for t, p in zip(true, part[c]) if p != "-"]
         ans = [(t, p) for t, p in g if p is not None]
         ps[c] = (len(ans) / max(1, len(g)), sum(m.get(p) == t for t, p in ans) / max(1, len(ans)))
-    return acc, rev, ps, len(tr._sum), onl
+    return acc, rev, ps, sum(k is not None for k in tr._lab), onl
 
 
 def run_set(tr, data):
@@ -267,6 +270,72 @@ def e2e(tr):
               f"(p95 {np.percentile(lat, 95):.0f})")
 
 
+def check_profiles(models_dir="models"):
+    """Check executável do provisório e dos perfis (pin/merge/forget/save/reset/speakers.json), com vozes dos fixtures."""
+    def clips(name, idx):
+        x = read_wav(os.path.join(DATA, name + ".wav"))
+        t = json.load(open(os.path.join(DATA, name + ".json"), encoding="utf-8"))["turns"]
+        return [x[int(t[i]["start"] * SR):int(t[i]["end"] * SR)] for i in idx]
+
+    A, B = clips("conv_2spk", (0, 2, 4, 6)), clips("conv_2spk", (1, 7, 9))  # A: 2,6 5,1 10,9 5,5 s; B: 3,7 5,9 5,9 s
+    s12 = int(1.2 * SR)
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "speakers.json")
+        tr = diar.SpeakerTracker(models_dir=models_dir, profiles_path=p)
+        # provisório: 2,6 s de voz nova = sem id (nem no palpite); ao somar confirm_s (3 s) ganha o id
+        assert tr.identify(A[0], True) is None and tr.identify(A[0], False) is None
+        a, b = tr.identify(A[1], True), tr.identify(B[0], True)
+        assert (a, b) == (0, 1), (a, b)
+        assert not tr.pin(7) and not os.path.exists(p)  # id que não existe
+        assert tr.pin(a) and diar.saved_speakers(p) == [a]
+        # reset: o fixado continua com o mesmo id; ids novos começam depois do maior fixado
+        tr.reset()
+        assert tr.identify(A[2][:s12], True) == a and tr.identify(B[1], True) == a + 1
+        # app reaberto (tracker novo lendo o arquivo): a mesma voz volta com o mesmo id já na 1ª fala >= 1 s
+        tr = diar.SpeakerTracker(models_dir=models_dir, profiles_path=p)
+        assert tr.identify(A[3][:s12], False) == a and tr.identify(A[3][:s12], True) == a
+        b = tr.identify(B[1], True)
+        assert b == a + 1, b
+        # save: o centróide gravado acompanha a fala nova
+        e0 = json.load(open(p))["profiles"][0]["emb"]
+        tr.identify(A[2], True)
+        tr.save()
+        assert json.load(open(p))["profiles"][0]["emb"] != e0
+        # merge: src some (peso somado; id nunca reaproveitado na sessão); src fixado passa a fixação para dst
+        assert tr.pin(b) and diar.saved_speakers(p) == [a, b]
+        w = tr._w[tr._lab.index(a)] + tr._w[tr._lab.index(b)]
+        tr.merge(a, b)
+        assert tr._lab == [b] and abs(tr._w[0] - w) < 1e-6 and tr._next > b and diar.saved_speakers(p) == [b]
+        # forget: tira do arquivo (sem nenhum fixado o arquivo some); no reset a voz esquecida não volta
+        tr.forget(b)
+        assert not os.path.exists(p) and tr._lab == [b]
+        tr.reset()
+        assert tr._lab == [] and tr.identify(B[2], True) == 0
+        assert tr.pin(0) and os.path.exists(p)
+        tr.forget(None)
+        assert not os.path.exists(p) and not tr._pin
+        # forget_saved / saved_speakers direto no arquivo (pipeline sem tracker carregado)
+        tr.identify(A[1], True)
+        assert tr.pin(0) and tr.pin(1) and diar.saved_speakers(p) == [0, 1]
+        diar.forget_saved(p, 0)
+        assert diar.saved_speakers(p) == [1]
+        diar.forget_saved(p)
+        assert not os.path.exists(p)
+        # outro modelo no arquivo invalida os perfis
+        tr.pin(1)
+        j = json.load(open(p))
+        with open(p, "w") as f:
+            json.dump({**j, "model": "outro.onnx"}, f)
+        assert diar.saved_speakers(p) == [] and diar.SpeakerTracker(models_dir=models_dir, profiles_path=p)._lab == []
+    # tabela cheia: descarta o provisório mais antigo; sem provisório, voz nova = None
+    A, B, C, C2, D = clips("conv_4spk", (4, 1, 2, 10, 18))  # 4,9 1,1 1,1 17,5 4,6 s
+    tr = diar.SpeakerTracker(models_dir=models_dir, max_speakers=2)
+    assert tr.identify(A, True) == 0 and tr.identify(B, True) is None and tr.identify(C, True) is None
+    assert tr._lab == [0, None]
+    assert tr.identify(C2, True) == 1 and tr.identify(D, True) is None and tr._lab == [0, 1]
+    print("perfis e provisório: ok")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--sweep", action="store_true")
@@ -277,11 +346,17 @@ def main():
     ap.add_argument("--e2e", action="store_true", help="com o Segmenter real (utterances como o pipeline as vê)")
     ap.add_argument("--models", default=None, help="arquivos .onnx separados por vírgula")
     ap.add_argument("--threshold", type=float, default=None)
+    ap.add_argument("--set", default="", help="constantes de app/diar.py, ex.: MAX_S=3,SLACK=0.1")
     ap.add_argument("--threads", type=int, default=None, help="threads do onnxruntime (padrão: diar.THREADS)")
     ap.add_argument("--models-dir", default="models")
     a = ap.parse_args()
     if a.threads:
         diar.THREADS = a.threads
+    for kv in filter(None, a.set.split(",")):
+        k, v = kv.split("=")
+        assert hasattr(diar, k), k
+        setattr(diar, k, float(v))
+    check_profiles(a.models_dir)
     data = load_fixtures(a.pad, a.harsh)
     if a.real:
         data["real_3spk"] = load_real(a.models_dir)

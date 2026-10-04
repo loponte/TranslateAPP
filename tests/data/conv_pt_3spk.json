@@ -1,0 +1,111 @@
+{
+ "voices": {
+  "A": "pt-BR-AntonioNeural",
+  "B": "pt-BR-FranciscaNeural",
+  "C": "pt-BR-ThalitaMultilingualNeural"
+ },
+ "turns": [
+  {
+   "speaker": "A",
+   "text": "Bom dia, pessoal. Vamos começar? Obrigado por entrarem.",
+   "start": 0.6,
+   "end": 4.82
+  },
+  {
+   "speaker": "B",
+   "text": "Bom dia.",
+   "start": 5.17,
+   "end": 5.86
+  },
+  {
+   "speaker": "C",
+   "text": "Oi, gente.",
+   "start": 6.11,
+   "end": 7.09
+  },
+  {
+   "speaker": "A",
+   "text": "Primeiro assunto, o lançamento do aplicativo. Juliana, você pode dar uma atualização rápida?",
+   "start": 7.29,
+   "end": 13.3
+  },
+  {
+   "speaker": "C",
+   "text": "Claro. A gente fechou quase todas as tarefas da semana, e os travamentos caíram bastante depois que corrigimos o vazamento de memória no carregador de imagens. O único problema que sobrou é a tela de pagamento nos celulares Android mais antigos, e o João acha que consegue resolver até quarta-feira.",
+   "start": 13.75,
+   "end": 30.29
+  },
+  {
+   "speaker": "A",
+   "text": "Ótimo. Quarta é realista?",
+   "start": 30.89,
+   "end": 32.73
+  },
+  {
+   "speaker": "C",
+   "text": "Acho que sim.",
+   "start": 33.03,
+   "end": 33.88
+  },
+  {
+   "speaker": "B",
+   "text": "Parece bom.",
+   "start": 34.68,
+   "end": 35.37
+  },
+  {
+   "speaker": "A",
+   "text": "Certo. Fernanda, como está a parte do servidor?",
+   "start": 35.57,
+   "end": 38.95
+  },
+  {
+   "speaker": "B",
+   "text": "A nova busca finalmente está em homologação, e o tempo de resposta caiu muito. A gente ainda precisa fazer um teste de carga com milhares de usuários antes de publicar em produção, e eu queria fazer isso na quinta à noite, quando o tráfego é menor, pra ninguém ser acordado de madrugada.",
+   "start": 39.45,
+   "end": 55.48
+  },
+  {
+   "speaker": "C",
+   "text": "Faz sentido.",
+   "start": 55.83,
+   "end": 56.72
+  },
+  {
+   "speaker": "A",
+   "text": "Tem risco de a gente perder o prazo de outubro?",
+   "start": 57.42,
+   "end": 59.87
+  },
+  {
+   "speaker": "B",
+   "text": "Só se o teste falhar.",
+   "start": 60.17,
+   "end": 61.38
+  },
+  {
+   "speaker": "A",
+   "text": "Justo. Mais alguma coisa?",
+   "start": 61.63,
+   "end": 63.51
+  },
+  {
+   "speaker": "C",
+   "text": "Por mim é isso.",
+   "start": 64.06,
+   "end": 64.96
+  },
+  {
+   "speaker": "B",
+   "text": "Por mim também.",
+   "start": 65.36,
+   "end": 66.17
+  },
+  {
+   "speaker": "A",
+   "text": "Valeu, pessoal. Até a semana que vem.",
+   "start": 67.07,
+   "end": 70.0
+  }
+ ]
+}

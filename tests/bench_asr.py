@@ -1,11 +1,15 @@
-"""Benchmark do ASR: WER nos fixtures + latência com modelo aquecido + checagem do filtro de alucinações.
+"""Benchmark do ASR (EN + PT): WER, acerto do idioma (LID) e latência com modelo aquecido + checagem do filtro de alucinações.
 
-Da raiz do projeto:  python tests/bench_asr.py [--only gpu|cpu] [--quick] [--reps 11] [--models a,b] [--beams 1,3,5]
-                                                [--no-wer] [--no-lat] [--threads 8] [--prompt "texto"] [-v]
-  padrão: candidatos de GPU (se houver CUDA) e de CPU; --models 'modelo[:compute]' (':cpu' = CPU int8);
-  --quick = 1 modelo, poucas rodadas; --prompt = initial_prompt em todos; -v = lista os turnos com erro.
-WER: cada turno recortado pelo gabarito (± 0,25 s), final=True, normalizado (minúsculas, sem pontuação, números unificados).
-Conjuntos: conv_2spk, conv_4spk, conv_2spk_noisy (SNR 12 dB) + extra "dificil" (conv_4spk com reverb e burburinho, SNR 8 dB).
+Da raiz do projeto:  python tests/bench_asr.py [--only gpu|cpu] [--models a,b] [--reps 11] [--fix] [--no-wer] [--no-lat]
+                                                [--threads 8] [--beams 5] [-v]
+  padrão: o modelo padrão da GPU (large-v3-turbo float16, se houver CUDA) e o da CPU (parakeet-v3);
+  --models 'modelo[:compute]' (':cpu' = CPU int8; parakeet-v3 é sempre CPU), ex.: --models large-v3-turbo,distil-large-v3.5,small.en:cpu;
+  --fix = idioma do fixture passado ao ASR (oráculo, sem detecção); -v = lista os turnos com erro.
+WER: cada turno recortado pelo gabarito (± 0,25 s), final=True, idioma detectado como no app (language=None; prior = último
+idioma do mesmo locutor, senão do fixture, senão "en"; < 1,5 s ou indeciso = prior). Normalização EN: minúsculas, sem
+pontuação, números unificados; PT: sem acento/pontuação e formas coloquiais iguais ("tá" = "está", "pra" = "para").
+Conjuntos (188 turnos): EN conv_2spk, conv_4spk, conv_2spk_noisy (SNR 12 dB), 4spk_dificil (reverb + burburinho 8 dB);
+PT conv_pt_2spk, conv_pt_3spk, conv_pt_2spk_noisy, pt_dificil (idem sobre o conv_pt_3spk). Modelo só-inglês pula os PT.
 Sai com código 1 se o filtro de alucinações falhar.
 """
 import argparse
@@ -20,17 +24,18 @@ from pathlib import Path
 
 import numpy as np
 
-from app.asr import Transcriber, ensure_model
+from app.asr import PARAKEET, Transcriber, ensure_model
 from app.events import SR
 import ctranslate2  # noqa: E402 (depois de app.asr, que prepara as DLLs da CUDA)
 
 DATA = Path(__file__).parent / "data"
 PAD = 0.25                  # folga em volta de cada turno (s)
 LENS = (1.5, 4, 8, 14)      # durações dos clipes de latência (s)
-# (modelo, dispositivo, compute_type)
-GPU_CFGS = [(m, "cuda", c) for m in ("distil-large-v3.5", "distil-large-v3", "large-v3-turbo", "small.en", "distil-small.en")
-            for c in ("float16", "int8_float16")]
-CPU_CFGS = [(m, "cpu", "int8") for m in ("small.en", "distil-small.en", "base.en", "tiny.en")]
+# (modelo, dispositivo, compute_type): os padrões do app.asr
+GPU_CFGS = [("large-v3-turbo", "cuda", "float16")]
+CPU_CFGS = [(PARAKEET, "cpu", "int8")]
+FIXTURES = {"conv_2spk": "en", "conv_4spk": "en", "conv_2spk_noisy": "en", "conv_pt_2spk": "pt", "conv_pt_3spk": "pt",
+            "conv_pt_2spk_noisy": "pt"}
 
 # ---------------------------------------------------------------- WER
 _NUM = {w: i for i, w in enumerate("zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen "
@@ -100,6 +105,20 @@ def edits(r, h):
     return d[-1]
 
 
+# formas coloquiais do PT-BR que o ASR escreve de um jeito ou de outro (o Parakeet "formaliza": tá -> está)
+PT_EQ = {"ta": "esta", "to": "estou", "pra": "para", "pro": "para o", "pros": "para os", "pras": "para as", "ne": ""}
+
+
+def norm_pt(s):
+    """Minúsculas, sem acento/pontuação; coloquial = formal (PT_EQ)."""
+    s = unicodedata.normalize("NFKD", s.replace("’", "'")).encode("ascii", "ignore").decode().lower()
+    return [x for w in re.sub(r"[^a-z0-9 ]", " ", s.replace("-", " ")).split() for x in PT_EQ.get(w, w).split()]
+
+
+def norm_lang(s, lang):
+    return norm(s) if lang == "en" else norm_pt(s)
+
+
 def load(name):
     with wave.open(str(DATA / f"{name}.wav")) as w:
         assert (w.getframerate(), w.getnchannels(), w.getsampwidth()) == (SR, 1, 2), name
@@ -122,20 +141,7 @@ def hard(x, turns, snr_db=8, seed=11):
     return (z * min(1.0, 0.95 / np.abs(z).max())).astype(np.float32)
 
 
-def wer(tr, x, turns, final=True, verbose=False):
-    """(erros, palavras de referência) transcrevendo cada turno recortado pelo gabarito ± PAD."""
-    err = ref = 0
-    for t in turns:
-        clip = x[max(0, int((t["start"] - PAD) * SR)):int((t["end"] + PAD) * SR)]
-        r, h = norm(t["text"]), norm(tr.transcribe(clip, final))
-        e = edits(r, h)
-        err, ref = err + e, ref + len(r)
-        if verbose and e:
-            print(f"    [{e}] ref: {' '.join(r)}\n        hyp: {' '.join(h)}")
-    return err, ref
-
-
-# ---------------------------------------------------------------- latência
+# ---------------------------------------------------------------- medição
 def timed(fn, reps):
     """(mediana, mínimo) em ms de `reps` rodadas, depois de uma rodada de aquecimento."""
     fn()
@@ -151,32 +157,52 @@ def table(head, rows):
         print("  ".join(str(c).ljust(n) if i < 2 else str(c).rjust(n) for i, (c, n) in enumerate(zip(r, w))))
 
 
-def bench(cfg, fx, speech, reps, threads, prompt, verbose, lat=True, wer_beams=(1, 3, 5)):
+def wer(tr, x, turns, lang, fix=False, verbose=False):
+    """(erros, palavras de referência, acertos de idioma) transcrevendo cada turno recortado pelo gabarito ± PAD."""
+    err = ref = ok = 0
+    last: dict[str, str] = {}  # locutor -> último idioma detectado (como o pipeline)
+    prior = "en"
+    for t in turns:
+        clip = x[max(0, int((t["start"] - PAD) * SR)):int((t["end"] + PAD) * SR)]
+        text, got = tr.transcribe(clip, True, lang if fix or not tr.multi else None, last.get(t["speaker"], prior))
+        last[t["speaker"]] = prior = got
+        r, h = norm_lang(t["text"], lang), norm_lang(text, lang)
+        e = edits(r, h)
+        err, ref, ok = err + e, ref + len(r), ok + (got == lang)
+        if verbose and (e or got != lang):
+            print(f"    [{e}{'' if got == lang else ' idioma ' + got}] ref: {' '.join(r)}\n        hyp: {' '.join(h)}")
+    return err, ref, ok
+
+
+def bench(cfg, fx, clips, reps, threads, verbose, lat=True, wer_beams=(5,), fix=False):
     name, dev, comp = cfg
     ensure_model("models", name)
     t0 = time.perf_counter()
     tr = Transcriber(model=name, device=dev, compute_type=comp, cpu_threads=threads)
     load_s = time.perf_counter() - t0
-    tr.prompt = prompt
     tr.warmup()
-    t0 = time.perf_counter(); tr.transcribe(speech[: 4 * SR], True); first = (time.perf_counter() - t0) * 1000  # 1a chamada pós-warmup
-    res = {"cfg": cfg, "load": load_s, "first": first, "wer": {}, "lat": {}}
-    print(f"  {name} {dev}/{comp}: carregado em {load_s:.1f} s, 1a chamada {first:.0f} ms", flush=True)
-    for beam in wer_beams:                      # WER: beam do final
+    t0 = time.perf_counter(); tr.transcribe(clips["en"][: 4 * SR], True); first = (time.perf_counter() - t0) * 1000  # 1a chamada pós-warmup
+    res = {"cfg": (tr.model_name, tr.device, tr.compute_type), "load": load_s, "first": first, "wer": {}, "lat": {}, "tr": tr}
+    print(f"  {tr.model_name} {tr.device}/{tr.compute_type}: carregado em {load_s:.1f} s, 1a chamada {first:.0f} ms", flush=True)
+    keys = [k for k in fx if tr.multi or fx[k][2] == "en"]
+    for beam in wer_beams if tr._pk is None else wer_beams[-1:]:   # WER: beam do final (o Parakeet não tem beam)
         tr.beam_final = beam
-        errs = [wer(tr, *fx[k], True, verbose and beam == 5) for k in fx]
-        res["wer"][beam] = [100 * e / n for e, n in errs] + [100 * sum(e for e, _ in errs) / sum(n for _, n in errs)]
-    for sec in LENS if lat else ():             # latência: parcial (beam 1) e finais (beam 3 e 5)
-        clip = speech[: int(sec * SR)]
+        res["wer"][beam] = {k: wer(tr, *fx[k], fix, verbose and beam == wer_beams[-1]) for k in keys}
+    tr.beam_final = 5
+    for sec in LENS if lat else ():             # latência: parcial (beam 1) e final (beam 5), com detecção de idioma
+        clip = clips["en"][: int(sec * SR)]
         res["lat"][("p", sec)] = timed(lambda: tr.transcribe(clip, False), reps)
-        for beam in (3, 5):
-            tr.beam_final = beam
-            res["lat"][(f"f{beam}", sec)] = timed(lambda: tr.transcribe(clip, True), reps)
+        res["lat"][("f", sec)] = timed(lambda: tr.transcribe(clip, True), reps)
+    if lat and tr.multi:
+        clip = clips["pt"][: 4 * SR]
+        res["lat"][("p", "4 PT")] = timed(lambda: tr.transcribe(clip, False), reps)
+        res["lat"][("f", "4 PT")] = timed(lambda: tr.transcribe(clip, True), reps)
     return res
 
 
-def hallucination_check(tr, x, turns):
-    """Silêncio, ruído branco e áudio curtíssimo devem devolver ''; e nenhuma fala real pode ser descartada."""
+def hallucination_check(tr, fx):
+    """Silêncio, ruído branco e áudio curtíssimo devem devolver '' (idioma detectado e fixo em PT/EN); e nenhuma fala
+    real (conv_4spk EN e conv_pt_3spk PT) pode ser descartada."""
     rng = np.random.default_rng(3)
     t = np.arange(3 * SR) / SR
     noise = lambda s, n=3 * SR: (rng.standard_normal(n) * s).astype(np.float32)
@@ -186,13 +212,18 @@ def hallucination_check(tr, x, turns):
     ok = True
     for name, a in cases.items():
         for final in (False, True):
-            out = tr.transcribe(a, final)
-            ok &= out == ""
-            if out:
-                print(f"  FALHA: {name} (final={final}) -> {out!r}")
-    kept = sum(bool(tr.transcribe(x[int((t["start"] - PAD) * SR):int((t["end"] + PAD) * SR)], True)) for t in turns)
-    ok &= kept == len(turns)
-    print(f"fala real preservada: {kept}/{len(turns)} turnos")
+            for lang in (None, "en", "pt"):
+                out = tr.transcribe(a, final, lang)[0]
+                ok &= out == ""
+                if out:
+                    print(f"  FALHA: {name} (final={final}, idioma={lang}) -> {out!r}")
+    kept = total = 0
+    for k in ("conv_4spk", "conv_pt_3spk") if tr.multi else ("conv_4spk",):
+        x, turns, lang = fx[k]
+        kept += sum(bool(tr.transcribe(x[int((t["start"] - PAD) * SR):int((t["end"] + PAD) * SR)], True, lang)[0]) for t in turns)
+        total += len(turns)
+    ok &= kept == total
+    print(f"fala real preservada: {kept}/{total} turnos")
     print("filtro de alucinacoes:", "OK" if ok else "FALHOU")
     return ok
 
@@ -200,57 +231,63 @@ def hallucination_check(tr, x, turns):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", choices=("gpu", "cpu"))
-    ap.add_argument("--quick", action="store_true")
     ap.add_argument("--reps", type=int, default=11)
     ap.add_argument("--models")
-    ap.add_argument("--beams", help="beams do final na parte de WER (padrão: 1,3,5 na GPU; 5 na CPU)")
+    ap.add_argument("--beams", default="5", help="beams do final na parte de WER (Whisper)")
     ap.add_argument("--threads", type=int, default=8, help="cpu_threads dos modelos de CPU")
-    ap.add_argument("--prompt", default=None)
+    ap.add_argument("--fix", action="store_true", help="passa o idioma do fixture (sem detecção)")
     ap.add_argument("--no-lat", action="store_true", help="só WER")
     ap.add_argument("--no-wer", action="store_true", help="só latência")
     ap.add_argument("-v", action="store_true")
     a = ap.parse_args()
-    if not (DATA / "READY").exists():
-        print("aviso: tests/data/READY ausente (fixtures ainda sendo geradas)")
-    fx = {k: load(k) for k in ("conv_2spk", "conv_4spk", "conv_2spk_noisy")}
-    fx["4spk_dificil"] = (hard(*fx["conv_4spk"]), fx["conv_4spk"][1])
-    x, turns = fx["conv_2spk"]
-    speech = np.concatenate([x[int(t["start"] * SR):int(t["end"] * SR)] for t in turns])  # só fala, sem pausas
+    sys.stdout.reconfigure(errors="replace")
+    fx = {k: (*load(k), lang) for k, lang in FIXTURES.items()}
+    fx["4spk_dificil"] = (hard(*fx["conv_4spk"][:2]), fx["conv_4spk"][1], "en")
+    fx["pt_dificil"] = (hard(*fx["conv_pt_3spk"][:2]), fx["conv_pt_3spk"][1], "pt")
+    fx = dict(sorted(fx.items(), key=lambda kv: kv[1][2]))  # EN primeiro
+    clips = {lang: np.concatenate([x[int(t["start"] * SR):int(t["end"] * SR)] for t in turns])  # só fala, sem pausas
+             for lang, (x, turns, _) in (("en", fx["conv_2spk"]), ("pt", fx["conv_pt_2spk"]))}
     if a.models:
         cfgs = []
         for m in a.models.split(","):
             n, _, c = m.partition(":")
-            cfgs.append((n, "cpu", "int8") if c == "cpu" else (n, "cuda", c or "float16"))
+            cfgs.append((n, "cpu", "int8") if c == "cpu" or n == PARAKEET else (n, "cuda", c or "float16"))
     else:
         gpu = ctranslate2.get_cuda_device_count() > 0
         cfgs = (GPU_CFGS if gpu and a.only != "cpu" else []) + (CPU_CFGS if a.only != "gpu" else [])
-        cfgs = cfgs[:1] if a.quick else cfgs
-    reps = 3 if a.quick else max(a.reps, 10)
+    reps = max(a.reps, 5)
     out = []
     for c in cfgs:
-        beams = tuple(map(int, a.beams.split(","))) if a.beams else ((1, 3, 5) if c[1] == "cuda" else (5,))
-        out.append(bench(c, fx, speech, reps, a.threads, a.prompt, a.v, not a.no_lat, () if a.no_wer else beams))
+        beams = () if a.no_wer else tuple(map(int, a.beams.split(",")))
+        out.append(bench(c, fx, clips, reps if c[1] == "cuda" else max(5, reps // 2), a.threads, a.v, not a.no_lat, beams, a.fix))
 
     mc = lambda r: f'{r["cfg"][1]}/{r["cfg"][2]}'
     if not a.no_wer:
-        print("\nWER (%) do final por beam | 2spk, 4spk, 2spk ruidoso (12 dB), 4spk dificil (reverb + burburinho 8 dB), total (ponderado por palavras)"
-              + (f" | initial_prompt={a.prompt!r}" if a.prompt else ""))
-        table(["modelo", "compute", "beam", "2spk", "4spk", "r12dB", "dificil", "total", "carga s", "1a chamada ms"],
-              [[r["cfg"][0], mc(r), b] + [f"{v:.1f}" for v in r["wer"][b]] + ([f'{r["load"]:.1f}', f'{r["first"]:.0f}'] if b == min(r["wer"]) else ["", ""])
-               for r in out for b in r["wer"]])
-    for kind, title in (("p", "parcial (beam 1)"), ("f3", "final beam 3"), ("f5", "final beam 5")) if not a.no_lat else ():
-        print(f"\nLatencia {title}, ms: mediana de {reps} (minimo), clipe de fala de N s")
-        table(["modelo", "compute"] + [f"{s} s" for s in LENS],
-              [[r["cfg"][0], mc(r)] + [f'{r["lat"][(kind, s)][0]:.0f} ({r["lat"][(kind, s)][1]:.0f})' for s in LENS] for r in out])
-    gpu = [r for r in out if r["cfg"][1] == "cuda" and 5 in r["wer"]]
-    if len(gpu) > 1 and not a.no_lat:  # regra do padrao: menor latencia entre os que ficam a <= 1,5 ponto do melhor WER
-        best = min(r["wer"][5][4] for r in gpu)
-        ok = sorted((r for r in gpu if r["wer"][5][4] <= best + 1.5), key=lambda r: r["lat"][("f5", 4)][1])
-        print(f"\nGPU com WER total <= {best + 1.5:.1f}% (melhor {best:.1f}% + 1,5), por latencia minima do final de 4 s: "
-              + ", ".join(f'{r["cfg"][0]} {r["cfg"][2]} ({r["lat"][("f5", 4)][1]:.0f} ms, WER {r["wer"][5][4]:.1f})' for r in ok)
-              + "\n(mesma arquitetura = mesma latencia: desempata o WER; com a GPU compartilhada o minimo oscila, repita em maquina livre)")
-    print("\nFiltro de alucinacoes (Transcriber padrao):")
-    sys.exit(0 if hallucination_check(Transcriber(), *fx["conv_4spk"]) else 1)
+        print("\nWER (%) do final | EN: 2spk, 4spk, 2spk ruidoso (12 dB), 4spk dificil (reverb + burburinho 8 dB) | PT: idem "
+              "(3spk no lugar do 4spk) | totais ponderados por palavras | LID = turnos com o idioma certo"
+              + (" | --fix: idioma do fixture" if a.fix else ""))
+        sets = list(fx)
+        tot = lambda vs: f"{100 * sum(v[0] for v in vs) / sum(v[1] for v in vs):.1f}" if vs else "-"
+        rows = []
+        for r in out:
+            for b, w in r["wer"].items():
+                en, pt = [w[k] for k in w if fx[k][2] == "en"], [w[k] for k in w if fx[k][2] == "pt"]
+                rows.append([r["cfg"][0], mc(r), b] + [f"{100 * w[k][0] / w[k][1]:.1f}" if k in w else "-" for k in sets]
+                            + [tot(en), tot(pt), f"{sum(v[2] for v in en + pt)}/{sum(len(fx[k][1]) for k in w)}"]
+                            + ([f'{r["load"]:.1f}', f'{r["first"]:.0f}'] if b == min(r["wer"]) else ["", ""]))
+        table(["modelo", "compute", "beam"] + [k.replace("conv_", "") for k in sets] + ["EN tot", "PT tot", "LID", "carga s", "1a ms"], rows)
+    for kind, title in (("p", "parcial (beam 1)"), ("f", "final (beam 5)")) if not a.no_lat else ():
+        cols = [*LENS, "4 PT"]
+        print(f"\nLatencia {title}, ms: mediana (minimo), clipe de fala de N s, idioma detectado (language=None)")
+        table(["modelo", "compute"] + [f"{s} s" for s in cols],
+              [[r["cfg"][0], mc(r)] + [f'{r["lat"][(kind, s)][0]:.0f} ({r["lat"][(kind, s)][1]:.0f})' if (kind, s) in r["lat"] else "-"
+                                      for s in cols] for r in out])
+    print("\nFiltro de alucinacoes:")
+    ok = True
+    for r in out:
+        print(f"  {r['cfg'][0]} {mc(r)}")
+        ok &= hallucination_check(r["tr"], fx)
+    sys.exit(0 if ok else 1)
 
 
 if __name__ == "__main__":

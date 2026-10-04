@@ -1,0 +1,134 @@
+{
+ "voices": {
+  "A": "pt-BR-AntonioNeural",
+  "B": "pt-BR-FranciscaNeural"
+ },
+ "turns": [
+  {
+   "speaker": "A",
+   "text": "E aí Camila, tá me ouvindo? O meu microfone tá funcionando?",
+   "start": 0.6,
+   "end": 4.42
+  },
+  {
+   "speaker": "B",
+   "text": "Tô sim, tá tudo certo. Desculpa o atraso, o meu computador travou de novo.",
+   "start": 4.82,
+   "end": 9.81
+  },
+  {
+   "speaker": "A",
+   "text": "Sem problema. Então, sobre o projeto novo, a gente precisa fechar o plano até sexta.",
+   "start": 10.46,
+   "end": 16.06
+  },
+  {
+   "speaker": "B",
+   "text": "Beleza, entendi.",
+   "start": 16.36,
+   "end": 17.48
+  },
+  {
+   "speaker": "A",
+   "text": "Faltam umas coisas ainda. Primeiro, o servidor de partidas continua caindo quando entra muita gente. Depois, tem um bug chato na tela de inventário. E o Marcos tá de férias até segunda.",
+   "start": 18.38,
+   "end": 29.74
+  },
+  {
+   "speaker": "B",
+   "text": "Peraí, sério?",
+   "start": 30.24,
+   "end": 31.04
+  },
+  {
+   "speaker": "A",
+   "text": "Pois é, o voo dele mudou. A correção do inventário ainda tá esperando revisão.",
+   "start": 32.04,
+   "end": 37.17
+  },
+  {
+   "speaker": "B",
+   "text": "Tá bom, eu reviso logo depois dessa chamada. Mas eu tô mais preocupada com o lag nos servidores da Europa.",
+   "start": 37.52,
+   "end": 43.95
+  },
+  {
+   "speaker": "A",
+   "text": "É verdade.",
+   "start": 44.7,
+   "end": 45.47
+  },
+  {
+   "speaker": "B",
+   "text": "Os jogadores do Brasil estão reclamando muito do ping, não dá pra jogar desse jeito.",
+   "start": 45.72,
+   "end": 50.59
+  },
+  {
+   "speaker": "A",
+   "text": "Que chato. Será que dá pra subir um servidor aqui em São Paulo?",
+   "start": 51.14,
+   "end": 54.55
+  },
+  {
+   "speaker": "B",
+   "text": "Vai sair um pouco caro, mas eu acho que vale a pena. Dá pra testar no ambiente de homologação antes.",
+   "start": 55.4,
+   "end": 60.99
+  },
+  {
+   "speaker": "A",
+   "text": "Perfeito. E o chefão novo? A galera tá dizendo que o ataque de fogo dele é muito forte.",
+   "start": 61.44,
+   "end": 66.77
+  },
+  {
+   "speaker": "B",
+   "text": "Verdade, eu vou diminuir o dano e aumentar o tempo de recarga da habilidade.",
+   "start": 67.07,
+   "end": 71.62
+  },
+  {
+   "speaker": "A",
+   "text": "Boa. Então, a atualização vai pro ar na sexta à noite. E a gente ainda precisa escrever as notas da versão.",
+   "start": 72.32,
+   "end": 79.08
+  },
+  {
+   "speaker": "B",
+   "text": "Calma aí, sexta à noite? Isso é de madrugada pro pessoal da Alemanha.",
+   "start": 79.68,
+   "end": 83.77
+  },
+  {
+   "speaker": "A",
+   "text": "Ah, é mesmo.",
+   "start": 84.72,
+   "end": 85.82
+  },
+  {
+   "speaker": "B",
+   "text": "Vamos fazer na quinta na hora do almoço, e deixa a sexta como plano reserva.",
+   "start": 86.17,
+   "end": 90.57
+  },
+  {
+   "speaker": "A",
+   "text": "Fechado. Eu atualizo a agenda e aviso todo mundo no canal.",
+   "start": 91.07,
+   "end": 94.66
+  },
+  {
+   "speaker": "B",
+   "text": "Show. Falamos depois?",
+   "start": 95.46,
+   "end": 97.01
+  },
+  {
+   "speaker": "A",
+   "text": "Falou, até amanhã. E não esquece de mandar o teu código antes de desligar.",
+   "start": 97.26,
+   "end": 101.78
+  }
+ ]
+}
