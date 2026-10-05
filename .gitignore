@@ -9,3 +9,8 @@ speakers.json
 selftest.txt
 build/
 dist/
+
+# privado (fica só no PC): conversas do Claude Code e o time de agentes
+conversa/
+time/
+importar-conversa.*
