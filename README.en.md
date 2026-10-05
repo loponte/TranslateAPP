@@ -128,6 +128,8 @@ screenshots either). To show them, turn off Settings › Subtitles › **Hide wh
 
 Gear button in the main window (next to the **EN / PT** switch, which changes the app language right away).
 
+![Settings › Subtitles](docs/ui-settings.png)
+
 - **General:** app language and **Replay tutorial**.
 - **Subtitles:** font size, opacity, always on top, show original speech, subtitle lines (1 to 3), hide when sharing the
   screen and **Snap to bottom**.

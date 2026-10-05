@@ -124,6 +124,8 @@ desligue em Configurações › Legenda › **Ocultar ao compartilhar a tela**.
 
 Botão da engrenagem na janela principal (ao lado do seletor **EN / PT**, que troca o idioma do app na hora).
 
+![Configurações › Legenda](docs/ui-settings.png)
+
 - **Geral:** idioma do app e **Rever tutorial**.
 - **Legenda:** tamanho da fonte, opacidade, sempre no topo, mostrar a fala original, linhas na legenda (1 a 3), ocultar
   ao compartilhar a tela e **Encaixar embaixo**.
