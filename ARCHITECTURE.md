@@ -1,11 +1,12 @@
 # TranslateAPP — arquitetura e contratos entre módulos
 
-App (Windows e macOS) que captura o áudio que sai do computador — o som inteiro ou só um app (Windows: WASAPI loopback e
-Process Loopback; macOS: ScreenCaptureKit) —, transcreve **inglês ou português** (idioma detectado por frase), separa por
+App para Windows que captura o áudio que sai do computador — o som inteiro ou só um app (WASAPI loopback e Process
+Loopback) —, transcreve **inglês ou português** (idioma detectado por frase), separa por
 **locutor**, traduz para o idioma da legenda (**pt-BR** ou **inglês**) e mostra a legenda ao vivo numa janela flutuante.
-100 % local (sem APIs externas, sem Claude), foco em **menor latência possível**.
+100 % local (sem APIs externas, sem Claude), foco em **menor latência possível**. O macOS saiu por enquanto (desde a v0.3.0;
+o código está no histórico do git, tag `v0.2.1`).
 
-> Modelos: ASR = **Whisper large-v3-turbo** (GPU) ou **Parakeet-TDT-0.6B-v3 int8** (CPU/Mac); tradução = **OPUS-MT** em
+> Modelos: ASR = **Whisper large-v3-turbo** (GPU) ou **Parakeet-TDT-0.6B-v3 int8** (CPU); tradução = **OPUS-MT** em
 > CTranslate2 (CC-BY-4.0, atribuição ao Helsinki-NLP/OPUS-MT em `models\mt-en-pt` e `models\mt-pt-en`), um modelo por direção.
 > Só 1 tradutor por sessão: `outro(sub_lang) → sub_lang`; fala no idioma da legenda não é traduzida.
 
@@ -20,10 +21,9 @@ Process Loopback; macOS: ScreenCaptureKit) —, transcreve **inglês ou portugu�
 - Fixtures de teste em `tests\data\` (ver `tests\data\README.md`): EN `conv_2spk.wav`, `conv_4spk.wav`, `conv_2spk_noisy.wav` (16 kHz mono), `conv_2spk_48k_stereo.wav`; PT (`tests\data\make_pt.py`, edge-tts, cache em `_cache_pt\`) `conv_pt_2spk` (102,4 s, 21 turnos), `conv_pt_3spk` (70,6 s, 17 turnos), `conv_pt_2spk_noisy` (12 dB). Cada um com `<nome>.json` = gabarito `{"voices":…, "turns":[{"speaker","text","start","end"}]}`.
 
 ## Plataformas, pastas de dados e empacotamento
-- `app/paths.py`: `DATA_DIR`, `MODELS`, `LOGS`, `SETTINGS` e `download(url, sha256, dst, on_progress)` (helper comum ao asr e ao mt). Empacotado (PyInstaller, `sys.frozen`): `%LOCALAPPDATA%\TranslateAPP` (Win) ou `~/Library/Application Support/TranslateAPP` (mac); rodando do código: a raiz do repo. `main.py` faz `os.chdir(DATA_DIR)`, então `models/` e `logs/` relativos continuam valendo. `settings.json` (UI) e `speakers.json` (vozes fixadas) ficam em `DATA_DIR` e no `.gitignore`, junto com o `selftest.txt`.
+- `app/paths.py`: `DATA_DIR`, `MODELS`, `LOGS`, `SETTINGS` e `download(url, sha256, dst, on_progress)` (helper comum ao asr e ao mt). Empacotado (PyInstaller, `sys.frozen`): `%LOCALAPPDATA%\TranslateAPP`; rodando do código: a raiz do repo. `main.py` faz `os.chdir(DATA_DIR)`, então `models/` e `logs/` relativos continuam valendo. `settings.json` (UI) e `speakers.json` (vozes fixadas) ficam em `DATA_DIR` e no `.gitignore`, junto com o `selftest.txt`.
 - Primeiro uso: modelos ausentes são baixados pelos próprios `ensure_model(..., on_progress)` (asr/mt/diar; o callback só dispara se há download; `None` = sem %). O `Pipeline._load` converte isso em `Status("Baixando reconhecimento de fala… (1/4)" | "Baixando tradutor… (2/4)" | "Baixando modelo de locutores… (3/4)", "download", progress)`; `ready` limpa. No .exe com NVIDIA, `cuda_dlls.ensure_cuda()` baixa cuBLAS/cuDNN (versões fixas, SHA-256 conferido) para `DATA_DIR/cuda.tmp` e renomeia para `cuda` só no fim; falhou = o pipeline força `device="cpu"` no ASR e no tradutor; sem GPU = CPU (Parakeet).
-- `app/audio.py` escolhe o backend por `sys.platform` (mesma interface; o `_pump` mono/16 kHz/grade de 32 ms é comum). macOS (`app/audio_mac.py`): "Áudio do sistema" e captura por app = helper Swift `native/sck_audio.swift` (SCStream, só áudio, 48 kHz estéreo f32 no stdout); os outros dispositivos = entradas via `sounddevice` (ex.: BlackHole). O helper é compilado com `swiftc` no build e vai em `Contents/Frameworks` do .app.
-- Build: `packaging/TranslateAPP.spec` (onedir, sem console; sem nvidia-*, sem modelos; inclui `app/assets` e os hiddenimports `app.ui_overlay`/`app.ui_i18n`; no Mac `ATSApplicationFontsPath = app/assets`, não testado; versão 0.3.0), `scripts/build_mac.sh` (swiftc + pyinstaller + `codesign -s -` ad-hoc + dmg) e `scripts/build_win.ps1` (Inno Setup); CI em `.github/workflows/build.yml` (matriz windows/macos: testes, build, `--selftest`, artefatos; tag `v*` = Release). `main.py --selftest` importa tudo, cria o VAD, lista dispositivos **e apps** (sem áudio não falha) e abre/fecha um Tk oculto. `multiprocessing.freeze_support()` em `main.py` é obrigatório.
+- Build: `packaging/TranslateAPP.spec` (onedir, sem console; sem nvidia-*, sem modelos; inclui `app/assets` e os hiddenimports `app.ui_overlay`/`app.ui_i18n`; versão 0.3.0) e `scripts/build_win.ps1` (Inno Setup); CI em `.github/workflows/build.yml` (windows-latest: testes, build, `--selftest`, artefatos; tag `v*` = Release). `main.py --selftest` importa tudo, cria o VAD, lista dispositivos **e apps** (sem áudio não falha) e abre/fecha um Tk oculto. `multiprocessing.freeze_support()` em `main.py` é obrigatório.
 
 ## Fluxo
 ```
@@ -47,7 +47,7 @@ final:   com texto no último parcial (fala confirmada):
 | Agente | Arquivos |
 |---|---|
 | Forja-Idiomas (ASR, MT, pipeline, integração) | `app/events.py`, `app/asr.py`, `app/mt.py`, `app/pipeline.py`, `app/main.py`, `app/paths.py`, `tests/bench_asr.py`, `tests/eval_mt.py`, `tests/test_pipeline.py`, `tests/e2e_report.py`, `tests/data/make_pt.py` + fixtures PT, `scripts/convert_mt.py`, `scripts/build_*`, `packaging/`, `.github/`, `run.bat`, `setup.ps1`, `requirements.txt`, `.gitignore`, `README.md`, `ARCHITECTURE.md`, `docs/app-live.png` |
-| Forja-Captura | `app/audio.py`, `app/audio_mac.py`, `native/sck_audio.swift`, `tests/test_audio.py` |
+| Forja-Captura | `app/audio.py`, `tests/test_audio.py` |
 | Forja-Locutores | `app/diar.py`, `tests/eval_diar.py`, `tests/eval_split.py` |
 | Vitral (UI) | `app/ui.py`, `app/ui_overlay.py`, `app/ui_i18n.py`, `app/assets/` (Outfit.ttf + OFL.txt), `docs/ui-*.png` |
 | Segmentação (sem dono nesta rodada) | `app/segmenter.py`, `tests/test_segmenter.py` |
@@ -70,17 +70,17 @@ class Update:   # Pipeline -> UI. Mesmo utt_id = mesma linha (a parcial é subst
 # SegEvent e Status sem mudança (Status.level: info|warn|error|ready|download; progress 0..1 no download)
 ```
 
-### `app/audio.py` / `app/audio_mac.py` / `native/sck_audio.swift`
+### `app/audio.py`
 ```python
 @dataclass
 class LoopbackDevice:
     index: int; name: str; is_default: bool
 @dataclass
 class AudioApp:
-    id: str       # Windows: exe ("Discord.exe"); mac: bundle id ("com.hnc.Discord")
-    name: str     # FileDescription do exe ("Discord", "Google Chrome") / applicationName
-    active: bool  # tocando agora (Windows); mac: False
-APP_CAPTURE: bool                                       # win: build >= 19041; mac: True
+    id: str       # exe ("Discord.exe")
+    name: str     # FileDescription do exe ("Discord", "Google Chrome")
+    active: bool  # tocando agora
+APP_CAPTURE: bool                                       # build >= 19041
 def list_loopback_devices() -> list[LoopbackDevice]     # saídas com loopback; padrão primeiro
 def list_audio_apps() -> list[AudioApp]                 # quem toca primeiro; [] se não suportado; qualquer thread (inicializa COM)
 
@@ -96,7 +96,6 @@ class LoopbackCapture:
 - **`app="X.exe"` (Windows):** Process Loopback via ctypes (`ActivateAudioInterfaceAsync("VAD\\Process_Loopback")` com `INCLUDE_TARGET_PROCESS_TREE`), float32 48 kHz estéreo. Uma thread "audio-app" põe `(t, 48000, 2, bytes)` em `_q`; o `_pump` é o mesmo. A `_manage_app` acha o processo raiz pelo exe, sem diferenciar maiúsculas (primeiro o que está tocando, depois o que tem sessão, depois qualquer um; sobe enquanto o pai tem o mesmo exe), vigia o processo a cada 0,5 s com um handle SYNCHRONIZE (o Process Loopback entrega zeros até para um pid morto) e, se ele morre, procura de novo e reabre; app ausente = nova tentativa a cada 1,5 s. `device` é ignorado; `device_name` = nome do app.
 - **Lista no Windows:** sessões de áudio de **todas** as saídas ativas (o Discord pode tocar num fone que não é o padrão), sem os sons do sistema, agrupadas pelo exe raiz. Uma sessão some depois de um tempo sem tocar, por isso a UI tem o botão de atualizar e o app é salvo pelo exe. `# ponytail:` dois exe iguais e independentes viram um item só (a captura pega o que está tocando).
 - **Mensagens (`on_status`, pt-BR):** `Capturando áudio de: <nome>` a cada (re)abertura (o pipeline transforma em "Pronto — escutando <nome>"); `<nome> não está aberto — esperando…` uma vez, com a linha do tempo seguindo em zeros; `A captura de <nome> parou — reabrindo…`; `Falha na captura por app (<nome>: <erro>) — use "Saída inteira"` (ativação recusada: o pipeline manda como `Status` **error**, a UI encerra a sessão e oferece "Usar a saída inteira"). As demais viram `warn`.
-- **Mac:** helper com `--list` (`pid\tbundle\tnome`) e `--app <bundleID>` (`SCContentFilter(display:including:)` com o app mais os processos `<id>.*`, os `.helper`); códigos de saída 0 ok, 2 o stream caiu, 3 sem permissão, 4 sem display, 5 app não encontrado, 6 o app fechou (vigia com `kill(pid, 0)` numa thread, sem run loop). `audio_mac`: 5 e 6 viram "não está aberto — esperando…" com nova tentativa a cada 1,5 s; `list_apps()` tira os `.helper` por prefixo.
 - Qualquer nº de canais/taxa → mono (média; 5.1/7.1: FL/FR + 0,7·centro) → 16 kHz com **PyAV/swr** (~1 ms de atraso fixo).
 
 ### `app/segmenter.py`
@@ -207,7 +206,7 @@ class App:
 - **Overlay** (`ui_overlay.Overlay`): `overrideredirect`, cantos do DWM (33) e borda (34). Opacidade por `-alpha`. Sem vidro acrylic (`SetWindowCompositionAttribute`): o texto do Tk sai pelo GDI com alfa 0 e sumia na tela de um monitor HDR (no print aparecia), então foi removido. `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` ligado por padrão (a legenda não aparece no compartilhamento de tela nem em prints). Resize pelas 8 bordas (hit-test de 8 px) e arrasto pelo meio; duplo clique encaixa embaixo, no centro (MonitorFromWindow). Controles só no hover; Ctrl +/− = fonte; Esc = principal. De 1 a 3 falas ancoradas embaixo (o que não cabe na altura sai): parcial em muted → final em text; a fala nova entra de baixo e a anterior sobe e esmaece (6 × 25 ms) até 50 %. Clicar no nome renomeia; o clique direito abre o menu (Juntar com ▸, Esquecer voz, …).
 - **Visual:** tokens, cores de locutor presas ao id (`id % 8`; None = #8E8BA8) e tipografia do relatório de UI. Fonte Outfit (OFL, `app/assets/Outfit.ttf` + `OFL.txt`) via `AddFontResourceExW(FR_PRIVATE)`; texto em Segoe UI Variable Text; ícones do Segoe Fluent Icons / MDL2 (glifo de texto fora do Windows; nada de emoji). **Os PNGs anti-aliased (pills, cards com glow, toggles, pontos) são gerados em tempo de execução por `ui_overlay.shape()`**, só com stdlib (zlib/struct), em cache por tamanho — as larguras dependem do texto traduzido e do DPI, então não há `scripts/make_ui_assets.py` nem PNG versionado. Medido: abrir + 1ª tela 378 ms (inclui o Tk), redesenhar a principal 11 ms, Configurações na 1ª vez 216 ms, 44 imagens em cache. `Kit.bind`/`Kit.reset` desfazem os binds de cada redesenho (senão os comandos Tcl acumulam).
 - **Status (D13):** os rótulos `info`/`download`/`ready` aparecem no idioma da UI (em PT, o texto do pipeline; em EN, "Loading models…", "Downloading models (n/m)… 42 %", "Ready — listening to <app/dispositivo>"); `warn`/`error` aparecem crus. `# ponytail:` erros só em pt-BR.
-- **`settings.json` (dono único: a UI; o main e o pipeline não leem):** `ui_lang`, `call_lang`, `sub_lang`, `source` ("all"|"app"), `device`, `audio_app` (exe / bundle id), `main_geometry`, `overlay{geometry, font 16–56 = 28, alpha .6–1 = .88, topmost = true, show_orig = true, lines 1–3 = 2, hide_capture}` e `speakers{"<id>": "Nome"}`. Chaves antigas são ignoradas. Ao abrir, nomes de ids que não estão em `get_speakers()` são descartados.
+- **`settings.json` (dono único: a UI; o main e o pipeline não leem):** `ui_lang`, `call_lang`, `sub_lang`, `source` ("all"|"app"), `device`, `audio_app` (exe), `main_geometry`, `overlay{geometry, font 16–56 = 28, alpha .6–1 = .88, topmost = true, show_orig = true, lines 1–3 = 2, hide_capture}` e `speakers{"<id>": "Nome"}`. Chaves antigas são ignoradas. Ao abrir, nomes de ids que não estão em `get_speakers()` são descartados.
 - **Locutores:** renomear = `on_speaker("pin", id)` + nome salvo; juntar = `on_speaker("merge", src, dst)` e a UI troca src por dst nas linhas já mostradas e nos updates atrasados (alias; o nome salvo migra para o dst). Alias, a lista do "Juntar com" e o clique no nome valem só na sessão atual: o `diar.reset()` de cada início reaproveita os ids (recomeçam em max(fixados)+1), então numa sessão nova o mesmo id pode ser outra pessoa e o nome das linhas antigas deixa de ser clicável. O campo de renomear é criado no `after_idle`, porque o `_press` do canvas roda depois do bind do item e põe o foco na janela; clicar fora confirma, e confirmar sem mudar o nome não fixa a voz. Esquecer = `"forget"`; "Esquecer todas" = `"forget_all"`.
 - **Checks:** `python -m app.ui --stress` (lógica das linhas, locutores, .srt, overlay: opacidade, resize e arrasto via `event_generate`, sem vazamento de binds; rajadas de 2 × 3.000 updates; falha com travada > 50 ms; juntar → sessão nova → o id antigo continua cru; clicar no nome dá o foco ao campo e clicar fora fecha o campo; escolher o idioma no onboarding traduz o status), `python -m app.ui_overlay` (contraste ≥ 4,5:1 de todos os tokens de texto e cores de locutor; PNG válido), `python -m app.ui_i18n` (mesmas chaves nas duas línguas). Demo: `python -m app.ui --demo [--first-run]` (grava numa cópia temporária do `settings.json`, como o `--stress`).
 
@@ -267,6 +266,5 @@ Metas: locutor ≥ 95 % (2spk) / ≥ 90 % (4spk, misto), WER ≤ 3 % (PT ≤ 4 %
 
 ### Riscos conhecidos
 - Windows 10 (19041–20347) sem teste de captura por app; apps cujo som sai de outro exe (Teams novo → `msedgewebview2.exe`) aparecem com o exe que toca; mixers (Voicemeeter) aparecem na lista.
-- Mac sem teste: helper `--app` (o áudio do Discord/Chrome sai pelo `.helper`?; se o SCK derrubar o stream quando o app fecha, o helper sai com 2 em vez de 6 e aparece "A captura do sistema parou" antes do aviso), Parakeet arm64, overlay só com `-alpha`, fonte via `ATSApplicationFontsPath`, atalhos de teclado num `overrideredirect`.
 - Resize do overlay testado com eventos simulados, não com mouse físico.
 - Filtros de alucinação PT sem números de uso real; PT→EN sem glossário de gíria.

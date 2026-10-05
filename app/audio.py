@@ -57,14 +57,7 @@ def _loopbacks(p: "pa.PyAudio") -> list[dict]:
 
 
 def list_loopback_devices() -> list[LoopbackDevice]:
-    """Windows: saídas WASAPI (padrão primeiro). macOS: "Áudio do sistema" + entradas (ex.: BlackHole)."""
-    if sys.platform == "darwin":
-        from app import audio_mac
-        try:
-            ins = audio_mac.inputs()
-        except Exception:   # sem PortAudio/sem dispositivo: o áudio do sistema ainda funciona
-            ins = []
-        return [LoopbackDevice(i, n, i == 0) for i, n in enumerate([audio_mac.SYSTEM, *ins])]
+    """Saídas WASAPI (padrão primeiro)."""
     with _PA:
         p = pa.PyAudio()
         try:
@@ -75,23 +68,20 @@ def list_loopback_devices() -> list[LoopbackDevice]:
 
 @dataclass
 class AudioApp:
-    id: str       # Windows: exe ("Discord.exe"); mac: bundle id ("com.hnc.Discord")
-    name: str     # FileDescription do exe ("Discord") / applicationName no mac
-    active: bool  # tocando agora (Windows); mac: sempre False
+    id: str       # exe ("Discord.exe")
+    name: str     # FileDescription do exe ("Discord")
+    active: bool  # tocando agora
 
 
 # a doc oficial pede o build 20348; o mesmo caminho funciona desde o 19041 (proc-tap/OBS). Só testado no 26300.
-APP_CAPTURE = sys.platform == "darwin" or (sys.platform == "win32" and sys.getwindowsversion().build >= 19041)
+APP_CAPTURE = sys.platform == "win32" and sys.getwindowsversion().build >= 19041
 
 
 def list_audio_apps() -> list[AudioApp]:
     """Apps que dá para capturar, quem está tocando primeiro; [] se não suportado. Qualquer thread (inicializa COM sozinha).
-    Windows: sessões de áudio de todas as saídas, agrupadas pelo exe do processo raiz (~10 ms). Mac: apps abertos (`helper --list`)."""
+    Windows: sessões de áudio de todas as saídas, agrupadas pelo exe do processo raiz (~10 ms)."""
     if not APP_CAPTURE:
         return []
-    if sys.platform == "darwin":
-        from app import audio_mac
-        return [AudioApp(b, n, False) for b, n in audio_mac.list_apps()]
     com = _com_init()
     try:
         procs = _procs()
@@ -349,7 +339,7 @@ class LoopbackCapture:
     def __init__(self, on_audio: Callable[[np.ndarray, float], None], device: str | None = None,
                  on_status: Callable[[str], None] | None = None, block_ms: int = 32, app: str | None = None):
         self.on_audio, self.device, self.on_status = on_audio, device, on_status
-        self.app = app                   # exe (Windows) / bundle id (mac); None = saída inteira (`device`)
+        self.app = app                   # exe; None = saída inteira (`device`)
         self.device_name = ""            # preenchido ao abrir (~0,1 s após start) e a cada reabertura; com app = nome do app
         self._n = block_ms * SR // 1000  # amostras por chunk
         self._q: queue.Queue = queue.Queue()
@@ -362,8 +352,7 @@ class LoopbackCapture:
         self._stop.clear()
         self._q = queue.Queue()
         self._threads = [threading.Thread(target=f, name=n, daemon=True)
-                         for n, f in (("audio-pump", self._pump), ("audio-dev", self._manage_mac if sys.platform == "darwin"
-                                                                    else self._manage_app if self.app else self._manage))]
+                         for n, f in (("audio-pump", self._pump), ("audio-dev", self._manage_app if self.app else self._manage))]
         for t in self._threads:
             t.start()
 
@@ -385,10 +374,6 @@ class LoopbackCapture:
                 traceback.print_exc()
 
     # ---- dispositivo ----
-    def _manage_mac(self) -> None:
-        from app import audio_mac
-        audio_mac.manage(self)
-
     def _open(self, p: "pa.PyAudio"):
         devs = _loopbacks(p)
         if self.device is None:

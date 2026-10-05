@@ -6,17 +6,7 @@ on:   # repo privado: só em tag v* ou manual (poupa minutos do Actions)
 
 jobs:
   build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            asset: dist/TranslateAPP-Setup.exe
-            exe: dist/TranslateAPP/TranslateAPP.exe
-          - os: macos-latest
-            asset: dist/TranslateAPP.dmg
-            exe: dist/TranslateAPP.app/Contents/MacOS/TranslateAPP
-    runs-on: ${{ matrix.os }}
+    runs-on: windows-latest   # só Windows por enquanto (o build do Mac saiu na v0.3.0)
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -27,7 +17,7 @@ jobs:
         shell: bash
         run: |
           uv venv --clear --python 3.12 .venv
-          if [ "$RUNNER_OS" = Windows ]; then PY=.venv/Scripts/python.exe; else PY=.venv/bin/python; fi
+          PY=.venv/Scripts/python.exe
           echo "PY=$PY" >> "$GITHUB_ENV"
           grep -v '^nvidia-' requirements.txt > req-ci.txt   # CUDA não vai no pacote nem nos testes
           uv pip install --python $PY -r req-ci.txt pytest
@@ -39,19 +29,18 @@ jobs:
       - name: Build
         shell: bash
         run: |
-          if [ "$RUNNER_OS" = Windows ]; then pwsh scripts/build_win.ps1; else scripts/build_mac.sh; fi
+          pwsh scripts/build_win.ps1
       - name: Smoke test (--selftest no binário empacotado)
         shell: bash
         run: |
           rc=0
-          "${{ matrix.exe }}" --selftest || rc=$?
-          if [ "$RUNNER_OS" = Windows ]; then F="$LOCALAPPDATA/TranslateAPP/selftest.txt"; else F="$HOME/Library/Application Support/TranslateAPP/selftest.txt"; fi
-          cat "$F" || true   # no .exe windowed o stdout não chega aqui
+          dist/TranslateAPP/TranslateAPP.exe --selftest || rc=$?
+          cat "$LOCALAPPDATA/TranslateAPP/selftest.txt" || true   # no .exe windowed o stdout não chega aqui
           exit $rc
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ runner.os }}-installer
-          path: ${{ matrix.asset }}
+          name: Windows-installer
+          path: dist/TranslateAPP-Setup.exe
           if-no-files-found: error
           retention-days: 3
 
@@ -70,4 +59,4 @@ jobs:
       - name: Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "${{ github.ref_name }}" assets/TranslateAPP-Setup.exe assets/TranslateAPP.dmg --repo "${{ github.repository }}" --title "${{ github.ref_name }}" --generate-notes
+        run: gh release create "${{ github.ref_name }}" assets/TranslateAPP-Setup.exe --repo "${{ github.repository }}" --title "${{ github.ref_name }}" --generate-notes

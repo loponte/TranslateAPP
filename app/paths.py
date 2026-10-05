@@ -12,8 +12,6 @@ def _data_dir() -> Path:
         return ROOT
     if sys.platform == "win32":
         return Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / "TranslateAPP"
-    if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / "TranslateAPP"
     return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "TranslateAPP"
 
 

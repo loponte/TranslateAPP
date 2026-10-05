@@ -10,27 +10,22 @@ e a parcial, em cinza, ~0,14 s depois do áudio que ela cobre.
 ![Legenda ao vivo (captura só do app, inglês → português)](docs/app-live.png)
 
 > Modelos locais: transcrição com o **Whisper large-v3-turbo** (OpenAI, MIT) na GPU ou o **Parakeet-TDT-0.6B-v3**
-> (NVIDIA, CC-BY-4.0) na CPU e no Mac; tradução com o **OPUS-MT** (Helsinki-NLP, CC-BY-4.0), um modelo por direção
+> (NVIDIA, CC-BY-4.0) na CPU; tradução com o **OPUS-MT** (Helsinki-NLP, CC-BY-4.0), um modelo por direção
 > (EN → PT-BR em `models\mt-en-pt`, PT → EN em `models\mt-pt-en`; origem, licença e atribuição ficam em cada pasta:
 > `info.json`, `LICENSE`, `README.md`). Locutores e VAD têm as licenças dos próprios autores.
 
 ## Baixar pronto (sem instalar Python)
-Na página de **Releases** do GitHub há o `TranslateAPP-Setup.exe` e o `TranslateAPP.dmg` (gerados pelo Actions). Os modelos
-**não** vêm no pacote: na 1ª abertura o app baixa o que precisa para a pasta de dados (Windows `%LOCALAPPDATA%\TranslateAPP`,
-macOS `~/Library/Application Support/TranslateAPP`) e mostra o progresso (reconhecimento de fala ~1,6 GB na GPU ou ~490 MB
-na CPU, tradutor ~860 MB, +~280 MB só se a legenda for em inglês, locutores ~45 MB). Logs em `logs\app.log` dessa pasta.
+Na página de **Releases** do GitHub há o `TranslateAPP-Setup.exe` (gerado pelo Actions). Os modelos **não** vêm no pacote:
+na 1ª abertura o app baixa o que precisa para a pasta de dados (`%LOCALAPPDATA%\TranslateAPP`) e mostra o progresso
+(reconhecimento de fala ~1,6 GB na GPU ou ~490 MB na CPU, tradutor ~860 MB, +~280 MB só se a legenda for em inglês, locutores ~45 MB). Logs em `logs\app.log` dessa
+pasta.
 - **Windows (.exe):** baixe e rode `TranslateAPP-Setup.exe` (instala por usuário, sem admin). Com GPU NVIDIA, o app baixa
   também cuBLAS/cuDNN (~1,3 GB) na 1ª vez; sem GPU (ou se falhar) roda na CPU com o Parakeet.
-- **macOS (.app, só Apple Silicon/arm64; macOS 13+):** baixe `TranslateAPP.dmg`, abra e arraste `TranslateAPP.app` para
-  Aplicativos. O app é assinado só ad-hoc (sem conta de desenvolvedor): na 1ª vez, clique com o botão direito → **Abrir** →
-  *Abrir mesmo assim* (ou Ajustes do Sistema › Privacidade e Segurança › *Abrir mesmo assim*). O áudio vem do
-  ScreenCaptureKit: libere o app em **Ajustes do Sistema › Privacidade e Segurança › Gravação de Tela e Áudio do Sistema** e
-  reabra (não grava a tela). Sem permissão, o status avisa. Alternativa sem permissão: escolha uma entrada de áudio
-  (ex.: BlackHole) em *Dispositivo*. Cada build novo pode pedir a permissão de novo (assinatura ad-hoc).
-- **Gerar você mesmo:** `scripts/build_mac.sh` (macOS; precisa de uv e Xcode CLT) → `dist/TranslateAPP.app` +
-  `dist/TranslateAPP.dmg`; `scripts\build_win.ps1` (Windows; precisa do Inno Setup) → `dist\TranslateAPP-Setup.exe`. O CI
-  (`.github/workflows/build.yml`) faz os dois, roda `TranslateAPP --selftest` no binário e, numa tag `v*`, anexa o `.exe` e o
-  `.dmg` a uma Release.
+- **macOS:** saiu por enquanto (o app é só Windows a partir da v0.3.0; o código do Mac está no histórico do
+  git, tag `v0.2.1`).
+- **Gerar você mesmo:** `scripts\build_win.ps1` (precisa do Inno Setup) → `dist\TranslateAPP-Setup.exe`. O CI
+  (`.github/workflows/build.yml`) faz o mesmo, roda `TranslateAPP --selftest` no binário e, numa tag `v*`, anexa o `.exe` a
+  uma Release.
 
 ## Instalar e rodar (a partir do código, Windows)
 1. **Uma vez:** botão direito em `setup.ps1` → *Executar com o PowerShell* (ou `powershell -ExecutionPolicy Bypass -File .\setup.ps1`).
@@ -52,7 +47,7 @@ na CPU, tradutor ~860 MB, +~280 MB só se a legenda for em inglês, locutores ~4
   - **Um app** escuta só o app escolhido (e os processos filhos dele): o resto do som do PC fica de fora. A lista mostra os
     apps com sessão de áudio (ponto verde = tocando agora); se o app não aparece, dê play nele e clique em atualizar. O app
     fica salvo pelo nome do exe: se ele fechar, a legenda espera ("Discord não está aberto — esperando…") e volta sozinha
-    quando ele reabrir. Precisa do Windows 10 versão 2004 ou mais novo (no Mac, sempre disponível).
+    quando ele reabrir. Precisa do Windows 10 versão 2004 ou mais novo.
 - **02 · Idiomas:**
   - **Idioma da call:** *Auto* detecta inglês ou português frase a frase (fala curta ou indecisa herda o idioma anterior do
     mesmo locutor); *English* ou *Português* fixa o idioma (sem detecção). "Detectado na call" mostra o idioma da última frase.

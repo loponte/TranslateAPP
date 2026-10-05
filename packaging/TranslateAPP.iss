@@ -3,7 +3,7 @@
 [Setup]
 AppId={{6F1B7C2E-3D54-4A8B-9E21-7C0A5B4D8E13}
 AppName=TranslateAPP
-AppVersion=0.2.0
+AppVersion=0.3.0
 AppPublisher=Loponte
 DefaultDirName={autopf}\TranslateAPP
 DefaultGroupName=TranslateAPP
