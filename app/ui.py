@@ -16,7 +16,7 @@ from types import SimpleNamespace
 from app.events import Status, Update
 from app.paths import DATA_DIR, SETTINGS
 from app.ui_i18n import STR, system_lang, t as tr
-from app.ui_overlay import BUILD, C, LEVEL, MAC, WIN, Kit, Overlay, caps, dark_titlebar, load_fonts, mix, spk_color
+from app.ui_overlay import C, LEVEL, MAC, WIN, Kit, Overlay, caps, dark_titlebar, load_fonts, mix, spk_color
 
 log = logging.getLogger(__name__)
 MAX_LINES = 2000      # utterances no widget da transcrição; as mais antigas saem da tela (continuam no arquivo salvo)
@@ -24,7 +24,7 @@ EXTRA_ID = 1_000_000  # utt_id das linhas extras de um final dividido (= app.pip
 BUDGET = 0.012        # s por tick processando updates: uma rajada nunca prende a UI
 DEF = {"call_lang": "auto", "sub_lang": "pt", "source": "all", "device": None, "audio_app": None, "main_geometry": None}
 CHOICES = {"call_lang": ("auto", "en", "pt"), "sub_lang": ("pt", "en"), "source": ("all", "app")}
-OV_DEF = {"geometry": None, "font": 28, "alpha": 0.88, "glass": WIN and BUILD >= 22000, "topmost": True,
+OV_DEF = {"geometry": None, "font": 28, "alpha": 0.88, "topmost": True,
           "show_orig": True, "lines": 2, "hide_capture": WIN}
 SIZES = {"lang": (760, 520), "tour": (760, 520), "main": (960, 680), "settings": (960, 680)}
 
@@ -429,7 +429,7 @@ class App:
     def _sec_subtitle(self, x, y, w):
         k, o, cv = self.kit, self.ov, self.cv
         rows = [("font", f"{o['font']} px", ("font", -2, 2)), ("opacity", f"{round(o['alpha'] * 100)} %", ("alpha", -.05, .05))]
-        rows += [(key, None, key) for key in (("glass",) if WIN else ()) + ("topmost", "show_orig")]
+        rows += [(key, None, key) for key in ("topmost", "show_orig")]
         rows += [("lines", None, None)] + ([("hide_capture", None, "hide_capture")] if WIN else []) + [("position", None, None)]
         yy = y - 46
         for key, val, ctl in rows:
@@ -1221,18 +1221,13 @@ def _stress():
     assert srt.startswith("1\n00:00:00,000 --> 00:00:01,000\n"), srt[:60]
     app.clear()
     assert not txt() and not app.lines
-    # overlay: aparece no início, vidro com fallback, arrastar e redimensionar pelas bordas
+    # overlay: aparece no início, opacidade, arrastar e redimensionar pelas bordas
     app.cfg["source"] = "all"
     app.start()
     r.update()
     app.ctl.submit(lambda: None).result(2)
     assert not r.winfo_ismapped() and ov.win.winfo_ismapped() and calls[-1]["sub_lang"] == "pt", calls[-1]
-    real = ov._accent
-    ov._accent = lambda *a: False  # API do vidro falhou: cai para -alpha
-    ov.style()
-    assert not ov.glass and abs(float(ov.win.attributes("-alpha")) - app.ov["alpha"]) < .01
-    ov._accent = real
-    ov.style()
+    assert abs(float(ov.win.attributes("-alpha")) - app.ov["alpha"]) < .01
     w = ov.win
     w.geometry("700x200+300+300")
     r.update()

@@ -1,5 +1,5 @@
 """Kit visual da UI (tokens, PNG anti-aliased gerado com stdlib, fontes, controles no Canvas) e o overlay de legenda.
-Sem dependências: tkinter + ctypes (Windows: cantos/vidro do DWM, ocultar da captura de tela)."""
+Sem dependências: tkinter + ctypes (Windows: cantos do DWM, ocultar da captura de tela)."""
 from __future__ import annotations
 
 import base64, math, re, struct, sys, zlib
@@ -9,7 +9,6 @@ from tkinter import font as tkfont
 from types import SimpleNamespace
 
 WIN, MAC = sys.platform == "win32", sys.platform == "darwin"
-BUILD = sys.getwindowsversion().build if WIN else 0
 ASSETS = Path(__file__).with_name("assets")
 
 # tokens (relatório de UI: amostrados da referência; contraste sobre bg: text 17,7 · muted 8,1 · primary 5,0)
@@ -419,7 +418,6 @@ class Overlay:
         cv.pack(fill="both", expand=True)
         self.hover = self.editing = False
         self.drag = self.anim = self.last = None
-        self.glass = False
         self.blink = 0
         cv.bind("<Motion>", self._motion)
         cv.bind("<ButtonPress-1>", self._press)
@@ -468,42 +466,20 @@ class Overlay:
         import ctypes
         return ctypes.windll.user32.GetParent(self.win.winfo_id()) or self.win.winfo_id()
 
-    @staticmethod
-    def _accent(hwnd, state, color):
-        """Vidro acrylic (SetWindowCompositionAttribute, não documentada). Devolve True se o Windows aceitou."""
-        import ctypes
-        from ctypes import c_int, c_size_t, c_uint, c_void_p
-
-        class ACCENT(ctypes.Structure):
-            _fields_ = [("state", c_int), ("flags", c_int), ("color", c_uint), ("anim", c_int)]
-
-        class DATA(ctypes.Structure):
-            _fields_ = [("attr", c_int), ("data", c_void_p), ("size", c_size_t)]
-        ac = ACCENT(state, 2, color, 0)
-        data = DATA(19, ctypes.cast(ctypes.byref(ac), c_void_p), ctypes.sizeof(ac))
-        return bool(ctypes.windll.user32.SetWindowCompositionAttribute(hwnd, ctypes.byref(data)))
-
     def style(self):
-        """topmost, cantos e borda do DWM, vidro (com fallback para -alpha) e "ocultar da captura"."""
+        """topmost, cantos e borda do DWM e "ocultar da captura". Sem vidro acrylic: o texto do Tk (GDI) sai com alfa 0 e
+        some em alguns monitores (visto num HDR) -- e o print não mostra, só a tela."""
         o, w = self.o, self.win
         w.attributes("-topmost", bool(o["topmost"]))
-        self.glass = False
         if WIN:
             win_attr(w, 33, 2)  # cantos arredondados nativos (Win11)
             win_attr(w, 34, colorref(C.hair_hi))
             try:
-                h = self.hwnd()
-                r, g, b = _rgb("#0D0B1E")
-                tint = round(max(.3, o["alpha"] - .25) * 255) << 24 | b << 16 | g << 8 | r  # 88 % -> tinta de 63 %
-                self.glass = bool(o["glass"]) and self._accent(h, 4, tint)
-                if not self.glass:
-                    self._accent(h, 0, 0)
                 import ctypes
-                ctypes.windll.user32.SetWindowDisplayAffinity(h, 0x11 if o["hide_capture"] else 0)  # WDA_EXCLUDEFROMCAPTURE
+                ctypes.windll.user32.SetWindowDisplayAffinity(self.hwnd(), 0x11 if o["hide_capture"] else 0)  # WDA_EXCLUDEFROMCAPTURE
             except Exception:
-                self.glass = False
-        w.attributes("-alpha", 1.0 if self.glass else o["alpha"])  # no vidro, a opacidade vai na tinta (texto 100 %)
-        self.cv.configure(bg="#000000" if self.glass else C.ov)  # preto = transparente sobre o acrylic
+                pass
+        w.attributes("-alpha", o["alpha"])
 
     def workarea(self):
         w = self.win
@@ -698,7 +674,7 @@ class Overlay:
         W, H = cv.winfo_width() / s, cv.winfo_height() / s
         if W < 200:
             return
-        P, bgc = self.PAD, ("#000000" if self.glass else C.ov)
+        P, bgc = self.PAD, C.ov
         wrap = W - 2 * P
         blocks = a.recent(o["lines"])
         fs = o["font"]
@@ -806,10 +782,8 @@ if __name__ == "__main__":  # check: contraste dos textos (>= 4,5:1) e o PNG ger
         for bg in (C.bg, C.s1, C.ov, C.field):
             assert contrast(fg, bg) >= 4.5, (fg, bg, round(contrast(fg, bg), 2))
     assert contrast(C.text, C.sel) >= 4.5 and contrast("#FFFFFF", C.ga) >= 4.5 and contrast("#FFFFFF", C.gb) >= 4.5  # texto do CTA
-    tint = mix("#FFFFFF", "#0D0B1E", .63)  # vidro a 88 % (tinta de 63 %) sobre uma página branca
-    assert contrast(C.text, tint) >= 4.5, round(contrast(C.text, tint), 2)
     png = shape(40, 20, 10, (C.ga, C.gb), (C.hair, C.hair), (C.gb, .3), 6, True)
     assert png[:4] == bytes((137, 80, 78, 71)) and struct.unpack(">II", png[16:24]) == (52, 32)
     raw = zlib.decompress(png[png.index(b"IDAT") + 4:-16])
     assert len(raw) == 32 * (1 + 52 * 4) and raw[1 + 4 * 0 + 3] == 0  # canto do glow: transparente
-    print("ok", round(contrast(C.muted, C.bg), 1), round(contrast(C.text, tint), 1))
+    print("ok", round(contrast(C.muted, C.bg), 1))

@@ -70,7 +70,7 @@ na CPU, tradutor ~860 MB, +~280 MB só se a legenda for em inglês, locutores ~4
   anterior sobe e esmaece. A posição e o tamanho ficam salvos.
 - **Ocultar ao compartilhar a tela** (ligado por padrão no Windows): quem vê sua tela no Discord, Zoom ou Meet não vê a legenda
   (ela também não sai em prints). Desligue em Configurações › Legenda se quiser mostrar.
-- **Configurações** (engrenagem): Geral (idioma do app, rever tutorial), Legenda (fonte, opacidade, vidro, sempre no topo,
+- **Configurações** (engrenagem): Geral (idioma do app, rever tutorial), Legenda (fonte, opacidade, sempre no topo,
   fala original, 1 a 3 linhas, ocultar ao compartilhar, encaixar), Locutores, Áudio e Modelos (pasta dos modelos).
   Tudo fica em `settings.json`.
 
