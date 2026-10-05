@@ -32,6 +32,9 @@ from app.events import SR
 # ponytail: GRACE fixo; um dispositivo que entregue em rajadas > 32 ms geraria chunks de zeros falsos -> adaptar ao intervalo medido
 GRACE = 0.032   # s: atraso tolerado na entrega do dado real antes de preencher o chunk com zeros
 TOL = 0.064     # s: erro (relógio x dado recebido) acima do qual a linha do tempo salta em vez de seguir suavemente
+# PortAudio não é thread-safe: PyAudio()/terminate/abrir/fechar stream em 2 threads ao mesmo tempo (troca de sessão: a
+# captura velha fecha enquanto a nova abre; lista de dispositivos da UI) = access violation em Pa_Initialize/Pa_Terminate
+_PA = threading.Lock()
 
 
 @dataclass
@@ -62,11 +65,12 @@ def list_loopback_devices() -> list[LoopbackDevice]:
         except Exception:   # sem PortAudio/sem dispositivo: o áudio do sistema ainda funciona
             ins = []
         return [LoopbackDevice(i, n, i == 0) for i, n in enumerate([audio_mac.SYSTEM, *ins])]
-    p = pa.PyAudio()
-    try:
-        return [LoopbackDevice(d["index"], d["name"].removesuffix(" [Loopback]"), d["is_default"]) for d in _loopbacks(p)]
-    finally:
-        p.terminate()
+    with _PA:
+        p = pa.PyAudio()
+        try:
+            return [LoopbackDevice(d["index"], d["name"].removesuffix(" [Loopback]"), d["is_default"]) for d in _loopbacks(p)]
+        finally:
+            p.terminate()
 
 
 @dataclass
@@ -109,6 +113,7 @@ if sys.platform == "win32":
     from ctypes import wintypes as W
 
     _ole = ctypes.OleDLL("ole32")
+    _ole.CoUninitialize.restype = _ole.CoTaskMemFree.restype = None   # void: o lixo em EAX não pode virar HRESULT/OSError
     _k32 = ctypes.WinDLL("kernel32", use_last_error=True)
     _ver = ctypes.WinDLL("version")
     for _f in ("CreateToolhelp32Snapshot", "OpenProcess", "CreateEventW"):
@@ -303,13 +308,14 @@ def _open_app_loopback(pid: int, timeout: float = 5.0):
     ctypes.c_uint32.from_buffer(pv, 8).value = ctypes.sizeof(params)
     _P.from_buffer(pv, 16).value = ctypes.addressof(params)
     op, client, cap, ev = _P(), _P(), _P(), None
+    # o handler não conta referências: o Windows pode chamar Release/QI depois (thread dele, timeout): fica vivo sempre (~200 B)
+    _LEAK.append((funcs, vtbl, handler, params, pv))
     try:
         mm = ctypes.WinDLL("mmdevapi")
         mm.ActivateAudioInterfaceAsync.restype = ctypes.HRESULT
         mm.ActivateAudioInterfaceAsync(ctypes.c_wchar_p("VAD\\Process_Loopback"), _guid("1CB9AD4C-DBFA-4c32-B178-C2F568A703B2"),
                                        ctypes.byref(pv), ctypes.byref(handler), ctypes.byref(op))   # IAudioClient
-        if not done.wait(timeout):   # o callback ainda pode chegar depois: o handler fica vivo de propósito (vaza ~200 B)
-            _LEAK.append((funcs, vtbl, handler, params, pv))
+        if not done.wait(timeout):
             raise TimeoutError("o Windows não respondeu à ativação")
         hr = ctypes.c_long()
         _call(op, 3, ctypes.byref(hr), ctypes.byref(client))   # GetActivateResult
@@ -411,18 +417,20 @@ class LoopbackCapture:
         dflt_id, last_msg = None, None
 
         def close():
-            for obj, fn in ((stream, "stop_stream"), (stream, "close"), (p, "terminate")):
-                try:
-                    getattr(obj, fn)()
-                except Exception:
-                    pass
+            with _PA:
+                for obj, fn in ((stream, "stop_stream"), (stream, "close"), (p, "terminate")):
+                    try:
+                        getattr(obj, fn)()
+                    except Exception:
+                        pass
 
         while not self._stop.is_set():
             try:
                 if stream is None:
-                    p = pa.PyAudio()   # nova instância = dispositivos reenumerados (novo padrão incluso)
-                    dflt_id = _default_render_id()
-                    stream = self._open(p)
+                    with _PA:
+                        p = pa.PyAudio()   # nova instância = dispositivos reenumerados (novo padrão incluso)
+                        dflt_id = _default_render_id()
+                        stream = self._open(p)
                     self._status(f"Capturando áudio de: {self.device_name}")
                     last_msg = None
                 elif not stream.is_active():

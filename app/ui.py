@@ -96,6 +96,7 @@ class App:
         self._build_transcript()
         self.overlay = Overlay(self)
         r.protocol("WM_DELETE_WINDOW", self.close)
+        r.report_callback_exception = lambda *exc: log.error("callback do Tk", exc_info=exc)  # no log, não só no stderr
         r.bind("<Escape>", lambda e: self._esc())
         r.bind("<Return>", lambda e: self._enter())
         self._devices()

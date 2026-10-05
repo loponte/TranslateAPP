@@ -1,11 +1,13 @@
 """Ponto de entrada: `python -m app.main` (ou run.bat). Monta UI + Pipeline; os modelos carregam em background."""
 from __future__ import annotations
 
+import faulthandler
 import logging
 import multiprocessing
 import os
 import queue
 import sys
+import threading
 
 from app.paths import DATA_DIR, LOGS
 
@@ -26,6 +28,12 @@ def _setup_logging() -> None:
         logging.getLogger(noisy).setLevel(logging.WARNING)
     if sys.stderr is not f:  # com console (python.exe): espelha o log na tela
         logging.getLogger().addHandler(logging.StreamHandler())
+    # crash nativo (access violation etc.) deixa o stack de todas as threads no log; exceção solta em thread também
+    faulthandler.enable(file=f, all_threads=True)
+    crash = logging.getLogger("crash")
+    sys.excepthook = lambda *exc: crash.critical("exceção não tratada", exc_info=exc)
+    threading.excepthook = lambda a: a.exc_type is SystemExit or crash.error(
+        "exceção na thread %s", a.thread.name if a.thread else "?", exc_info=(a.exc_type, a.exc_value, a.exc_traceback))
 
 
 def selftest() -> None:
@@ -71,6 +79,7 @@ def main() -> None:
               on_start=pipe.start, on_stop=pipe.stop, on_speaker=pipe.speaker, autostart=AUTOSTART)
     try:
         app.run()
+        logging.info("janela fechada: encerrando")  # sem esta linha no fim do log = o processo morreu
     finally:
         pipe.stop()
 
